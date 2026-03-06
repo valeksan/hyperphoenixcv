@@ -3,7 +3,7 @@
 ![CI](https://github.com/valeksan/hyperphoenixcv/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.8%20|%203.9%20|%203.10%20|%203.11%20|%203.12-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![PyPI](https://img.shields.io/pypi/v/hyperphoenixcv)
+![PyPI](https://img.shields.io/pypi/v/hyperphoenixcv?v=0.2.1)
 
 > *"Rise from the ashes of interrupted experiments"*
 
