@@ -1,0 +1,10 @@
+{
+    "python.defaultInterpreterPath": "/home/vi/anaconda3/bin/python3",
+    "python.analysis.extraPaths": [
+        "src"
+    ],
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportMissingImports": "none",
+        "reportMissingModuleSource": "none"
+    }
+}
