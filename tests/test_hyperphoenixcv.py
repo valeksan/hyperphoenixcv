@@ -5,6 +5,7 @@ from sklearn.datasets import make_classification
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import ParameterGrid
 from hyperphoenixcv import HyperPhoenixCV
 
 @pytest.fixture
@@ -302,7 +303,7 @@ def test_hyperphoenixcv_final_fit(sample_data, sample_pipeline, sample_param_gri
         param_grid=sample_param_grid,
         scoring='accuracy',
         cv=2,
-        finaly_fit_best_model=True,
+        refit=True,
         verbose=False
     )
     

@@ -1,29 +1,45 @@
 # HyperPhoenixCV 🐦‍🔥
 
-> *"Возрождайтесь из пепла прерванных экспериментов"*
+> *"Rise from the ashes of interrupted experiments"*
 
-HyperPhoenixCV - это умный инструмент для подбора гиперпараметров, который, как мифический феникс, **возрождается после прерываний** и продолжает поиск оптимальных решений. Никогда больше не теряйте часы вычислений из-за неожиданных остановок!
+HyperPhoenixCV is a smart hyperparameter tuning tool that, like the mythical phoenix, **resumes after interruptions** and continues searching for optimal solutions. Never lose hours of computation due to unexpected stops again!
 
-## Почему HyperPhoenixCV?
+**Other languages:** [Русский](README_RU.md)
 
-Название **HyperPhoenixCV** отсылает к мифическому фениксу — птице, которая возрождается из пепла. Точно так же ваш поиск гиперпараметров может "возродиться" после прерывания, продолжая с последней сохраненной точки, а не начиная всё сначала.
-CV в названии указывает на связь с кросс-валидацией, подчеркивая специализацию библиотеки в области машинного обучения.
+## Installation
 
-## Отличия от простого GridSearchCV:
+```bash
+pip install hyperphoenixcv
+```
 
-### **Возобновляемость**
-Прервались из-за нехватки времени или ресурсов? Просто запустите снова — продолжится с последней точки!
+Or install from source:
+
+```bash
+git clone https://github.com/valeksan/hyperphoenixcv.git
+cd hyperphoenixcv
+pip install -e .
+```
+
+## Why HyperPhoenixCV?
+
+The name **HyperPhoenixCV** refers to the mythical phoenix – a bird that rises from its ashes. In the same way, your hyperparameter search can "rise again" after an interruption, continuing from the last saved checkpoint instead of starting over from scratch.
+The "CV" in the name indicates the connection with cross‑validation, emphasizing the library's specialization in machine learning.
+
+## Differences from plain GridSearchCV:
+
+### **Resumability**
+Ran out of time or resources? Just run it again – it will continue from the last checkpoint!
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    checkpoint_path="my_experiment.pkl"  # Ключевой параметр!
+    checkpoint_path="my_experiment.pkl"  # Key parameter!
 )
-hp.fit(X, y)  # Прервали? Запустите снова с тем же путем
+hp.fit(X, y)  # Interrupted? Run again with the same path
 ```
 
-### **Умная оптимизация**
-Байесовская оптимизация помогает быстрее находить лучшие параметры.
+### **Smart optimization**
+Bayesian optimization helps find better parameters faster.
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
@@ -33,14 +49,14 @@ hp = HyperPhoenixCV(
 )
 ```
 
-### **Гибкость** 
-Полный перебор, случайный поиск или предсказательная оптимизация — выбирайте подход. Множественные метрики.
+### **Flexibility**
+Exhaustive search, random search, or predictive optimization – choose your approach. Multiple metrics supported.
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
     random_search=True,
-    n_iter=50  # Количество случайных комбинаций
+    n_iter=50  # Number of random combinations
 )
 ```
 ```python
@@ -51,40 +67,40 @@ hp = HyperPhoenixCV(
 )
 ```
 
-### **Автоматическое сохранение**
-Все результаты сохраняются в чекпоинты и CSV.
+### **Automatic saving**
+All results are saved to checkpoints and CSV.
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    results_csv="experiment_results.csv"  # Результаты сохраняются в CSV
+    results_csv="experiment_results.csv"  # Results saved to CSV
 )
 ```
 
-### **Совместимость**
-Полностью совместим с scikit-learn API (а если нет то поправим).
+### **Compatibility**
+Fully compatible with the scikit‑learn API (if not, we'll fix it).
 
-## 🚀 Быстрый старт
+## 🚀 Quick Start
 ```python
 from hyperphoenixcv import HyperPhoenixCV
 from sklearn.pipeline import Pipeline
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 
-# Создаем пайплайн
+# Create a pipeline
 pipeline = Pipeline([
     ('tfidf', TfidfVectorizer()),
     ('clf', LogisticRegression(max_iter=1000))
 ])
 
-# Определяем сетку параметров
+# Define the parameter grid
 param_grid = {
     'tfidf__max_features': [1000, 5000, 10000],
     'tfidf__ngram_range': [(1, 1), (1, 2)],
     'clf__C': [0.001, 0.01, 0.1, 1.0]
 }
 
-# Создаем и запускаем HyperPhoenixCV
+# Create and run HyperPhoenixCV
 hp = HyperPhoenixCV(
     estimator=pipeline,
     param_grid=param_grid,
@@ -94,21 +110,21 @@ hp = HyperPhoenixCV(
     verbose=True
 )
 
-# Первый запуск (может занять много времени)
+# First run (may take a long time)
 hp.fit(X_train, y_train)
 
-# Если процесс был прерван, просто запустите снова:
-hp.fit(X_train, y_train)  # Продолжит с последней сохраненной точки!
+# If the process was interrupted, just run again:
+hp.fit(X_train, y_train)  # Continues from the last saved checkpoint!
 
-# Получаем результаты
-print("Лучшие параметры:", hp.best_params_)
-print("Лучший F1-скор:", hp.best_score_)
+# Get results
+print("Best parameters:", hp.best_params_)
+print("Best F1 score:", hp.best_score_)
 
-# Получаем топ-5 результатов
+# Get top‑5 results
 top_results = hp.get_top_results(5)
 print(top_results)
 ```
 
-## 🙏 Благодарности
+## 🙏 Acknowledgments
 
-Спасибо сообществу scikit-learn за основу, на которой построена эта библиотека.
+Thanks to the scikit‑learn community for the foundation on which this library is built.

@@ -12,22 +12,24 @@ import numpy as np
 import joblib
 import pandas as pd
 from sklearn.base import BaseEstimator
-from sklearn.model_selection import ParameterGrid, cross_validate
+from sklearn.model_selection import ParameterGrid, cross_validate, StratifiedKFold, KFold
 from sklearn.preprocessing import LabelEncoder
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.exceptions import NotFittedError
+from sklearn.utils.validation import check_is_fitted
 
 class HyperPhoenixCV(BaseEstimator):
     """
     Возобновляемый поиск гиперпараметров с поддержкой чекпоинтов и байесовской оптимизации.
     Поддерживает полный перебор, случайный поиск и байесовскую оптимизацию.
-    
+
     Пример использования:
     # Создание объекта
     hp = HyperPhoenixCV(
         estimator=combat_pipeline,
         param_grid={
             'tfidf__max_features': [8000, 12000, 15000],
-            'tfidf__ngram_range': [(1,1), (1,2)],         
+            'tfidf__ngram_range': [(1,1), (1,2)],
             'clf__C': [0.001, 0.01, 0.1],
             'clf__penalty': ['l1','l2'],
             'clf__solver': ['liblinear', 'saga'],
@@ -40,21 +42,21 @@ class HyperPhoenixCV(BaseEstimator):
         results_csv="experiment_results.csv",
         verbose=True
     )
-    
+
     # Запуск поиска
     hp.fit(X, y)
-    
+
     # Если процесс был прерван, запустите снова с тем же checkpoint_path:
     hp.fit(X, y)  # Продолжит с последней сохраненной точки!
-    
+
     # Получение результатов
     print("Лучшие параметры:", hp.best_params_)
     print("Лучший скор:", hp.best_score_)
-    
+
     # Топ-10 результатов
     top_10 = hp.get_top_results(10)
     print(top_10)
-    
+
     # Удалить чекпоинт вручную
     hp.clear_checkpoint()
     """
@@ -75,11 +77,11 @@ class HyperPhoenixCV(BaseEstimator):
         random_state: int | None = None,
         use_bayesian_optimization: bool = False,
         bayesian_optimizer = None,
-        finaly_fit_best_model: bool = False,
+        refit: bool = True,
     ):
         """
         Инициализирует HyperPhoenixCV.
-        
+
         Parameters:
         -----------
         estimator : sklearn estimator
@@ -109,9 +111,12 @@ class HyperPhoenixCV(BaseEstimator):
         use_bayesian_optimization : bool
             Использовать ли байесовскую оптимизацию (предсказательный отбор параметров)
         bayesian_optimizer : sklearn regressor, optional
-            Модель, которая предсказывает, какие параметры будут лучше (по умолчанию RandomForestRegressor)
-        finaly_fit_best_model : bool
-            Обучать ли лучшую модель на всем датасете после поиска
+            Модель, которая предсказывает, какие параметры будут лучше
+            (по умолчанию RandomForestRegressor)
+        refit : bool, default=True
+            Обучать ли лучшую модель на всем датасете после поиска.
+            Если True, после завершения поиска гиперпараметров будет вызван
+            `best_estimator_.fit(X, y)`.
         """
         self.estimator = estimator
         self.param_grid = param_grid
@@ -125,9 +130,11 @@ class HyperPhoenixCV(BaseEstimator):
         self.n_iter = n_iter
         self.random_state = random_state
         self.use_bayesian_optimization = use_bayesian_optimization
-        self.bayesian_optimizer = bayesian_optimizer or RandomForestRegressor(n_estimators=20, random_state=42)
+        self.bayesian_optimizer = (
+            bayesian_optimizer or RandomForestRegressor(n_estimators=20, random_state=42)
+        )
         self.label_encoders = {}
-        self.finaly_fit_best_model = finaly_fit_best_model
+        self.refit = refit
 
         # Удаляем чекпоинт, если указано
         if clear_checkpoint and os.path.exists(checkpoint_path):
@@ -138,26 +145,32 @@ class HyperPhoenixCV(BaseEstimator):
     def _generate_param_list(self) -> list[dict]:
         """
         Генерирует список параметров: полный перебор или случайный.
-        
+
         Returns:
         --------
         list[dict]: Список комбинаций параметров для тестирования.
         """
         all_params = list(ParameterGrid(self.param_grid))
-        
+
         if self.random_search:
             if self.random_state is not None:
                 random.seed(self.random_state)
-            
+
             if len(all_params) <= self.n_iter:
                 if self.verbose:
-                    print(f"Всего комбинаций ({len(all_params)}) <= n_iter ({self.n_iter}). Используем все.")
+                    print(
+                        f"Всего комбинаций ({len(all_params)}) <= n_iter ({self.n_iter}). "
+                        f"Используем все."
+                    )
                 return all_params
-            else:
-                selected_params = random.sample(all_params, self.n_iter)
-                if self.verbose:
-                    print(f"Выбрано {len(selected_params)} случайных комбинаций из {len(all_params)} возможных.")
-                return selected_params
+            # else is unnecessary after return
+            selected_params = random.sample(all_params, self.n_iter)
+            if self.verbose:
+                print(
+                    f"Выбрано {len(selected_params)} случайных комбинаций "
+                    f"из {len(all_params)} возможных."
+                )
+            return selected_params
         else:
             if self.verbose:
                 print(f"Полный перебор: {len(all_params)} комбинаций.")
@@ -166,7 +179,7 @@ class HyperPhoenixCV(BaseEstimator):
     def _load_checkpoint(self) -> list[dict]:
         """
         Загружает результаты из чекпоинта.
-        
+
         Returns:
         --------
         list[dict]: Список результатов из чекпоинта.
@@ -180,15 +193,21 @@ class HyperPhoenixCV(BaseEstimator):
                     valid_results = [r for r in results if 'error' not in r]
                     if valid_results:
                         # Сортируем по первой метрике
-                        best_result = max(valid_results, key=lambda x: x.get(f'mean_test_{self.scoring[0]}', float('-inf')))
+                        best_result = max(valid_results,
+                                          key=lambda x: x.get(f'mean_test_{self.scoring[0]}',
+                                                              float('-inf')))
                         print(f"Текущий лучший результат из чекпоинта:")
-                        print(f"   score: {best_result.get(f'mean_test_{self.scoring[0]}', 0):.4f} ± {best_result.get(f'std_test_{self.scoring[0]}', 0):.4f}")
+                        score_key = f'mean_test_{self.scoring[0]}'
+                        std_key = f'std_test_{self.scoring[0]}'
+                        print(f"   score: {best_result.get(score_key, 0):.4f} ± "
+                              f"{best_result.get(std_key, 0):.4f}")
                         if len(self.scoring) > 1:
                             for metric in self.scoring[1:]:
                                 mean_key = f'mean_test_{metric}'
                                 std_key = f'std_test_{metric}'
                                 if mean_key in best_result and std_key in best_result:
-                                    print(f"   {metric}: {best_result[mean_key]:.4f} ± {best_result[std_key]:.4f}")
+                                    print(f"   {metric}: {best_result[mean_key]:.4f} ± "
+                                          f"{best_result[std_key]:.4f}")
                         print(f"   Параметры: {best_result.get('params', {})}")
             return results
         return []
@@ -196,7 +215,7 @@ class HyperPhoenixCV(BaseEstimator):
     def _save_checkpoint(self, results: list[dict]):
         """
         Сохраняет результаты в чекпоинт.
-        
+
         Parameters:
         -----------
         results : list[dict]
@@ -207,12 +226,12 @@ class HyperPhoenixCV(BaseEstimator):
     def _format_scores(self, cv_results: dict[str, np.ndarray]) -> dict[str, any]:
         """
         Форматирует результаты кросс-валидации.
-        
+
         Parameters:
         -----------
         cv_results : dict[str, np.ndarray]
             Результаты кросс-валидации от cross_validate.
-            
+
         Returns:
         --------
         dict[str, any]: Отформатированные результаты.
@@ -229,12 +248,12 @@ class HyperPhoenixCV(BaseEstimator):
     def _encode_params(self, params_list: list[dict]) -> np.ndarray:
         """
         Кодирует список параметров в числовую матрицу.
-        
+
         Parameters:
         -----------
         params_list : list[dict]
             Список параметров для кодирования.
-            
+
         Returns:
         --------
         np.ndarray: Закодированные параметры в виде матрицы.
@@ -257,17 +276,21 @@ class HyperPhoenixCV(BaseEstimator):
 
         return X.values
 
-    def _suggest_next_params(self, all_param_combinations: list[dict], completed_results: list[dict]) -> list[dict]:
+    def _suggest_next_params(
+        self,
+        all_param_combinations: list[dict],
+        completed_results: list[dict],
+    ) -> list[dict]:
         """
         Сортирует оставшиеся параметры по предсказанной метрике (если используется байесовская оптимизация).
-        
+
         Parameters:
         -----------
         all_param_combinations : list[dict]
             Все возможные комбинации параметров.
         completed_results : list[dict]
             Уже завершённые результаты.
-            
+
         Returns:
         --------
         list[dict]: Отсортированный список параметров.
@@ -301,7 +324,7 @@ class HyperPhoenixCV(BaseEstimator):
     def fit(self, X, y, groups=None):
         """
         Выполняет подбор гиперпараметров с сохранением промежуточных результатов.
-        
+
         Parameters:
         -----------
         X : array-like of shape (n_samples, n_features)
@@ -310,7 +333,7 @@ class HyperPhoenixCV(BaseEstimator):
             Целевые значения.
         groups : array-like of shape (n_samples,), default=None
             Группы для групповой кросс-валидации (если используется).
-            
+
         Returns:
         --------
         self : object
@@ -337,7 +360,6 @@ class HyperPhoenixCV(BaseEstimator):
                 print("Оставшиеся параметры отсортированы по предсказанной метрике.")
 
         # --- Определяем CV ---
-        from sklearn.model_selection import StratifiedKFold, KFold
 
         if isinstance(self.cv, int):
             classification_metrics = {
@@ -389,17 +411,25 @@ class HyperPhoenixCV(BaseEstimator):
                         mean_key = f'mean_test_{metric}'
                         std_key = f'std_test_{metric}'
                         if mean_key in result and std_key in result:
-                            current_metrics.append(f"{metric}: {result[mean_key]:.4f} ± {result[std_key]:.4f}")
+                            current_metrics.append(
+                                f"{metric}: {result[mean_key]:.4f} ± {result[std_key]:.4f}"
+                            )
                     current_str = " | ".join(current_metrics)
 
                     metric_key = f'mean_test_{self.scoring[0]}'
                     if metric_key in result:
-                        best_score = max(r[metric_key] for r in all_results if metric_key in r)
+                        best_score = max(
+                            r[metric_key] for r in all_results if metric_key in r
+                        )
                         best_metrics = []
                         for metric in self.scoring:
                             metric_key_other = f'mean_test_{metric}'
                             if metric_key_other in result:
-                                best_other = max(r[metric_key_other] for r in all_results if metric_key_other in r)
+                                best_other = max(
+                                    r[metric_key_other]
+                                    for r in all_results
+                                    if metric_key_other in r
+                                )
                                 best_metrics.append(f"{metric}: {best_other:.4f}")
                         best_str = " | ".join(best_metrics)
                         print(f"Сохранено. Текущие: {current_str} | Лучшие: {best_str}")
@@ -420,9 +450,9 @@ class HyperPhoenixCV(BaseEstimator):
         self.cv_results_ = self._format_cv_results(all_results)
         self.best_params_ = self._get_best_params(all_results)
         self.best_score_ = self._get_best_score(all_results)
-        
+
         self.best_estimator_ = self.estimator.set_params(**self.best_params_)
-        if self.finaly_fit_best_model:
+        if self.refit:
             self.best_estimator_.fit(X, y)
 
         if self.verbose:
@@ -430,19 +460,75 @@ class HyperPhoenixCV(BaseEstimator):
             print(f"Лучший результат ({self.scoring[0]}): {self.best_score_:.4f}")
             if self.random_search:
                 total_grid = len(list(ParameterGrid(self.param_grid)))
-                print(f"Использован случайный перебор: {self.n_iter} из {total_grid} возможных комбинаций ({self.n_iter/total_grid*100:.2f}%)")
+                print(
+                    f"Использован случайный перебор: {self.n_iter} из {total_grid} "
+                    f"возможных комбинаций ({self.n_iter/total_grid*100:.2f}%)"
+                )
 
         return self
+
+    def predict(self, X):
+        """
+        Предсказания с помощью лучшей модели.
+
+        Parameters:
+        -----------
+        X : array-like of shape (n_samples, n_features)
+            Данные для предсказания.
+
+        Returns:
+        --------
+        y_pred : array-like of shape (n_samples,)
+            Предсказанные значения.
+        """
+        check_is_fitted(self, 'best_estimator_')
+        return self.best_estimator_.predict(X)
+
+    def predict_proba(self, X):
+        """
+        Вероятности классов (если лучшая модель поддерживает predict_proba).
+
+        Parameters:
+        -----------
+        X : array-like of shape (n_samples, n_features)
+            Данные для предсказания.
+
+        Returns:
+        --------
+        y_proba : array-like of shape (n_samples, n_classes)
+            Вероятности классов.
+        """
+        check_is_fitted(self, 'best_estimator_')
+        return self.best_estimator_.predict_proba(X)
+
+    def score(self, X, y):
+        """
+        Оценка лучшей модели на данных X, y.
+
+        Parameters:
+        -----------
+        X : array-like of shape (n_samples, n_features)
+            Данные для оценки.
+        y : array-like of shape (n_samples,)
+            Истинные значения.
+
+        Returns:
+        --------
+        score : float
+            Значение метрики (по умолчанию используется метрика scoring[0]).
+        """
+        check_is_fitted(self, 'best_estimator_')
+        return self.best_estimator_.score(X, y)
 
     def _format_cv_results(self, results: list[dict]) -> dict[str, np.ndarray]:
         """
         Форматирует результаты в формат, совместимый с GridSearchCV.
-        
+
         Parameters:
         -----------
         results : list[dict]
             Список результатов.
-            
+
         Returns:
         --------
         dict[str, np.ndarray]: Форматированные результаты.
@@ -466,12 +552,12 @@ class HyperPhoenixCV(BaseEstimator):
     def _get_best_params(self, results: list[dict]) -> dict:
         """
         Получает лучшие параметры.
-        
+
         Parameters:
         -----------
         results : list[dict]
             Список результатов.
-            
+
         Returns:
         --------
         dict: Лучшие параметры.
@@ -488,12 +574,12 @@ class HyperPhoenixCV(BaseEstimator):
     def _get_best_score(self, results: list[dict]) -> float:
         """
         Получает лучший скор.
-        
+
         Parameters:
         -----------
         results : list[dict]
             Список результатов.
-            
+
         Returns:
         --------
         float: Лучший скор.
@@ -509,7 +595,7 @@ class HyperPhoenixCV(BaseEstimator):
     def _save_results_to_csv(self, results: list[dict]):
         """
         Сохраняет результаты в CSV.
-        
+
         Parameters:
         -----------
         results : list[dict]
@@ -543,12 +629,12 @@ class HyperPhoenixCV(BaseEstimator):
     def get_top_results(self, n: int = 10) -> pd.DataFrame:
         """
         Возвращает топ-N результатов.
-        
+
         Parameters:
         -----------
         n : int
             Количество топ результатов для возврата.
-            
+
         Returns:
         --------
         pd.DataFrame: Топ-N результатов.
@@ -584,12 +670,12 @@ class HyperPhoenixCV(BaseEstimator):
         """
         Загружает результаты из чекпоинта и возвращает топ-N.
         Полезно, если fit() был прерван и CSV не был создан.
-        
+
         Parameters:
         -----------
         n : int
             Количество топ результатов для возврата
-            
+
         Returns:
         --------
         pd.DataFrame
