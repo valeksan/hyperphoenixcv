@@ -1,0 +1,5 @@
+clf__C,tfidf__max_features,mean_test_accuracy,std_test_accuracy
+0.1,10,0.5,0.0
+0.1,20,0.5,0.0
+1.0,10,0.5,0.0
+1.0,20,0.5,0.0
