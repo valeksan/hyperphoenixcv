@@ -96,7 +96,7 @@ hp.fit(X, y)
 
 print("Best parameters:", hp.best_params_)
 print("Best score:", hp.best_score_)
-print("Best index:", hp.best_index_)  # New attribute
+print("Best index:", hp.best_index_)
 
 # Get top‑5 results
 top_results = hp.get_top_results(5)
