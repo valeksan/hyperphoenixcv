@@ -96,7 +96,7 @@ hp.fit(X, y)
 
 print("Лучшие параметры:", hp.best_params_)
 print("Лучшая точность:", hp.best_score_)
-print("Индекс лучшего кандидата:", hp.best_index_)  # Новый атрибут
+print("Индекс лучшего кандидата:", hp.best_index_)
 
 # Получаем топ‑5 результатов
 top_results = hp.get_top_results(5)
@@ -206,7 +206,7 @@ ts_cv = TimeSeriesSplit(n_splits=5)
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    cv=ts_cv,          # Использовать объект сплиттера
+    cv=ts_cv,          # Используется объект сплиттера
     scoring='accuracy'
 )
 
