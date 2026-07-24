@@ -100,19 +100,8 @@ def test_hyperphoenixcv_full_grid_search(sample_data, sample_pipeline, sample_pa
 def test_hyperphoenixcv_checkpoint_resume(sample_data, sample_pipeline, sample_param_grid):
     """Tests resuming after interruption."""
     X, y = sample_data
-    
-    # Create a checkpoint with partial results
-    partial_results = [{
-        'params': {'tfidf__max_features': 10, 'clf__C': 0.1},
-        'mean_test_accuracy': 0.7,
-        'std_test_accuracy': 0.05
-    }]
-    
-    import joblib
-    joblib.dump(partial_results, "test_checkpoint.pkl")
-    
-    # Create a new instance that should load the checkpoint
-    hp = HyperPhoenixCV(
+
+    first = HyperPhoenixCV(
         estimator=sample_pipeline,
         param_grid=sample_param_grid,
         scoring='accuracy',
@@ -122,7 +111,18 @@ def test_hyperphoenixcv_checkpoint_resume(sample_data, sample_pipeline, sample_p
         results_csv="test_results.csv",
         verbose=False
     )
-    
+    first.fit(X, y)
+
+    hp = HyperPhoenixCV(
+        estimator=sample_pipeline,
+        param_grid=sample_param_grid,
+        scoring='accuracy',
+        cv=2,
+        n_jobs=1,
+        checkpoint_path="test_checkpoint.pkl",
+        results_csv="test_results.csv",
+        verbose=False,
+    )
     hp.fit(X, y)
     
     # Verify that it continued from where it left off

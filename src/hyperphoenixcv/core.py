@@ -9,17 +9,18 @@ and Bayesian optimization to accelerate the search for optimal hyperparameters.
 """
 
 import os
+import warnings
 import numpy as np
 import pandas as pd
 from typing import Union
 from sklearn.base import BaseEstimator, clone
 from sklearn.exceptions import NotFittedError
-from sklearn.utils.validation import check_is_fitted
 
 from .search_strategies import create_search_strategy
 from .checkpoint import CheckpointManager
 from .result_manager import ResultManager
 from .cv_executor import CVExecutor
+from .study_identity import StudyIdentity
 
 
 class HyperPhoenixCV(BaseEstimator):
@@ -85,6 +86,10 @@ class HyperPhoenixCV(BaseEstimator):
         pre_dispatch: str = '2*n_jobs',
         error_score: Union[str, float] = 'raise',
         early_stopping_patience: int | None = None,
+        dataset_id: str | None = None,
+        resume: str = "auto",
+        scorer_id: str | None = None,
+        cv_id: str | None = None,
     ):
         """
         Initializes HyperPhoenixCV.
@@ -152,6 +157,10 @@ class HyperPhoenixCV(BaseEstimator):
         self.pre_dispatch = pre_dispatch
         self.error_score = error_score
         self.early_stopping_patience = early_stopping_patience
+        self.dataset_id = dataset_id
+        self.resume = resume
+        self.scorer_id = scorer_id
+        self.cv_id = cv_id
 
     @property
     def _scoring(self):
@@ -190,7 +199,7 @@ class HyperPhoenixCV(BaseEstimator):
         """Discard runtime and fitted state from a previous fit attempt."""
         for name in (
             "search_strategy", "checkpoint_manager", "result_manager", "cv_executor",
-            "best_params_", "best_score_", "best_estimator_", "cv_results_", "best_index_",
+            "_study_identity", "best_params_", "best_score_", "best_estimator_", "cv_results_", "best_index_",
         ):
             self.__dict__.pop(name, None)
 
@@ -260,12 +269,32 @@ class HyperPhoenixCV(BaseEstimator):
             Returns the instance.
         """
         self._reset_fit_state()
+        if self.dataset_id is None:
+            warnings.warn(
+                "dataset_id=None disables dataset-level checkpoint identity; pass a stable dataset_id for safe resume.",
+                UserWarning,
+                stacklevel=2,
+            )
+        self._study_identity = StudyIdentity.create(
+            estimator=self.estimator,
+            param_grid=self.param_grid,
+            scoring=self.scoring,
+            cv=self.cv,
+            random_state=self.random_state,
+            dataset_id=self.dataset_id,
+            scorer_id=self.scorer_id,
+            cv_id=self.cv_id,
+        )
         self._create_runtime_components()
         if self.clear_checkpoint:
             self.checkpoint_manager.clear()
 
         # Load progress from checkpoint
-        checkpoint_results = self.checkpoint_manager.load()
+        envelope = self.checkpoint_manager.load_envelope(
+            self._study_identity,
+            resume=self.resume,
+        )
+        checkpoint_results = [] if envelope is None else envelope.results
         self.result_manager.add_results(checkpoint_results)
 
         # Generate all parameter combinations
@@ -311,7 +340,7 @@ class HyperPhoenixCV(BaseEstimator):
                 groups=groups,
             )
             self.result_manager.add_result(result)
-            self.checkpoint_manager.save(self.result_manager.results)
+            self.checkpoint_manager.save(self.result_manager.results, self._study_identity)
 
             if self.verbose and 'error' not in result:
                 current_str = self._format_metric_string(result)
@@ -506,4 +535,3 @@ class HyperPhoenixCV(BaseEstimator):
         Saves results to checkpoint.
         """
         CheckpointManager(self.checkpoint_path, verbose=self.verbose).save(results)
-
