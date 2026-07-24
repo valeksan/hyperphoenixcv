@@ -310,6 +310,13 @@ class HyperPhoenixCV(BaseEstimator):
             Returns the instance.
         """
         self._reset_fit_state()
+        if self.clear_checkpoint:
+            warnings.warn(
+                "clear_checkpoint=True is deprecated and will be removed in 0.6; "
+                "call clear_checkpoint_file() explicitly before fit() instead.",
+                FutureWarning,
+                stacklevel=2,
+            )
         if self.dataset_id is None:
             warnings.warn(
                 "dataset_id=None disables dataset-level checkpoint identity; pass a stable dataset_id for safe resume.",

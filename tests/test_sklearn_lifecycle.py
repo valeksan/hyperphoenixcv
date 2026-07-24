@@ -52,6 +52,20 @@ def test_constructor_does_not_clear_checkpoint(tmp_path):
     assert checkpoint.read_bytes() == b"existing checkpoint"
 
 
+def test_clear_checkpoint_is_deprecated_at_fit_time(tmp_path):
+    from sklearn.datasets import make_classification
+
+    X, y = make_classification(n_samples=30, n_features=4, random_state=0)
+    search = make_search(
+        checkpoint_path=str(tmp_path / "study.sqlite3"),
+        results_csv=str(tmp_path / "results.csv"),
+        clear_checkpoint=True,
+    )
+
+    with pytest.warns(FutureWarning, match="clear_checkpoint=True is deprecated"):
+        search.fit(X, y)
+
+
 def test_sklearn_clone_and_get_params_preserve_constructor_values():
     search = make_search(scoring="accuracy", clear_checkpoint=True)
 

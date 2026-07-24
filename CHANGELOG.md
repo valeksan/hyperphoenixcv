@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.1 — 2026-07-24
+
+### Deprecated
+
+- `clear_checkpoint=True` is deprecated and will be removed in 0.6. Call
+  `clear_checkpoint_file()` explicitly before `fit()` instead.
+
+### Platform policy
+
+- P0 supports SQLite stores on a local filesystem only. Windows locking and
+  durability behavior is not CI-validated yet; Windows is therefore not a
+  supported P0 target. Do not place a store on a network or synced filesystem.
+
 ## 0.4.0 — 2026-07-24
 
 ### Changed

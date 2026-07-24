@@ -3,7 +3,7 @@
 ![CI](https://github.com/valeksan/hyperphoenixcv/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![PyPI](https://img.shields.io/pypi/v/hyperphoenixcv?v=0.4.0)
+![PyPI](https://img.shields.io/pypi/v/hyperphoenixcv?v=0.4.1)
 
 > *"Возрождайтесь из пепла прерванных экспериментов"*
 
@@ -258,6 +258,8 @@ hp.fit(X, y, groups=groups)
 - `storage_path`: явный путь к локальному SQLite store; заменяет вывод из `checkpoint_path`.
 - `dataset_id`: стабильный идентификатор датасета. Нужен для сильной identity resume; `None` выдаёт warning.
 - `resume`: `"auto"` (по умолчанию), `"must"` или `"never"`.
+- `clear_checkpoint=True`: deprecated; перед `fit()` вызывайте
+  `clear_checkpoint_file()`. Параметр будет удалён в 0.6.
 - `results_csv`: путь к CSV‑файлу для сохранения результатов (по умолчанию=None).
 - `verbose`: уровень детализации (по умолчанию=False).
 
@@ -276,6 +278,10 @@ hp.fit(X, y, groups=groups)
 - `load_results_from_checkpoint(n=10)`: прочитать top results из SQLite после прерывания.
 - `import_legacy_checkpoint(path, trusted=True)`: однократная trusted migration legacy pickle.
 - `clear_checkpoint_file()`: явно удалить SQLite store.
+
+SQLite store поддержан только на локальной файловой системе. Windows locking и
+durability не проверены в CI для P0, поэтому Windows пока не является
+поддерживаемой платформой. Не используйте network/synced folders для store.
 
 Полный список параметров и методов см. в исходном коде или используйте `help(HyperPhoenixCV)`.
 

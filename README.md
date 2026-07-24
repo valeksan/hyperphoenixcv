@@ -3,7 +3,7 @@
 ![CI](https://github.com/valeksan/hyperphoenixcv/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![PyPI](https://img.shields.io/pypi/v/hyperphoenixcv?v=0.4.0)
+![PyPI](https://img.shields.io/pypi/v/hyperphoenixcv?v=0.4.1)
 
 > *"Rise from the ashes of interrupted experiments"*
 
@@ -256,6 +256,8 @@ Main class for hyperparameter search.
 - `storage_path`: explicit local SQLite store path; overrides `checkpoint_path` derivation.
 - `dataset_id`: stable dataset identifier. Required for strong resume identity; `None` emits a warning.
 - `resume`: `"auto"` (default), `"must"`, or `"never"`.
+- `clear_checkpoint=True`: deprecated; call `clear_checkpoint_file()` before
+  `fit()` instead. It will be removed in 0.6.
 - `results_csv`: path to CSV file for saving results (default=None).
 - `verbose`: verbosity level (default=False).
 
@@ -274,6 +276,10 @@ Main class for hyperparameter search.
 - `load_results_from_checkpoint(n=10)`: read top results from SQLite after interruption.
 - `import_legacy_checkpoint(path, trusted=True)`: one-time trusted legacy pickle migration.
 - `clear_checkpoint_file()`: delete SQLite store explicitly.
+
+SQLite storage is supported only on a local filesystem. Windows locking and
+durability behavior is not CI-validated in P0, so Windows is not yet a
+supported target. Do not use network or synced folders for a study store.
 
 For a complete list of parameters and methods, see the source code or use `help(HyperPhoenixCV)`.
 
