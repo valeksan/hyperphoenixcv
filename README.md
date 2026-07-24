@@ -164,7 +164,8 @@ Evaluate using several metrics at once:
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    scoring=['f1', 'accuracy', 'precision']
+    scoring={'f1': 'f1', 'accuracy': 'accuracy', 'precision': 'precision'},
+    refit='f1',
 )
 ```
 
@@ -188,12 +189,16 @@ Control parallel execution and error behavior:
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    n_jobs=4,                # Use 4 CPU cores
-    pre_dispatch='2*n_jobs', # Limit number of simultaneously dispatched jobs
-    error_score=np.nan,      # Assign NaN to failed evaluations instead of raising
+    n_jobs=4,
+    parallelism='trials',    # Default: up to four trials, one CV worker each
+    inner_max_num_threads=1, # Native threads per trial process
+    error_score=np.nan,
     verbose=True
 )
 ```
+
+`parallelism='folds'` instead evaluates one trial at a time and uses `n_jobs`
+for folds. Nested trial-and-fold parallelism is intentionally unsupported.
 
 ### Early Stopping
 
@@ -251,6 +256,8 @@ Main class for hyperparameter search.
 - `scoring`: metric(s) to evaluate (string, callable, list, or dict).
 - `cv`: int, cross‑validation splitter, or iterable (default=5).
 - `n_jobs`: number of parallel jobs (default=1).
+- `parallelism`: `"trials"` (default) or `"folds"`; exactly one axis uses `n_jobs`.
+- `inner_max_num_threads`: optional native-thread cap for process-parallel trials.
 - `pre_dispatch`: controls number of dispatched jobs (default='2*n_jobs').
 - `error_score`: value to assign when an error occurs (default=np.nan).
 - `early_stopping_patience`: number of iterations without improvement to stop early (default=None, disabled).

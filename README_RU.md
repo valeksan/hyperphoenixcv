@@ -164,7 +164,8 @@ hp = HyperPhoenixCV(
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    scoring=['f1', 'accuracy', 'precision']
+    scoring={'f1': 'f1', 'accuracy': 'accuracy', 'precision': 'precision'},
+    refit='f1',
 )
 ```
 
@@ -190,12 +191,16 @@ import numpy as np
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    n_jobs=4,                # Использовать 4 ядра CPU
-    pre_dispatch='2*n_jobs', # Ограничить количество одновременно запущенных задач
-    error_score=np.nan,      # Присваивать NaN при ошибках вместо исключения
+    n_jobs=4,
+    parallelism='trials',    # По умолчанию: до четырёх trials, CV однопоточный
+    inner_max_num_threads=1, # Число native threads на процесс trial
+    error_score=np.nan,
     verbose=True
 )
 ```
+
+`parallelism='folds'` запускает один trial за раз, распределяя `n_jobs` по
+folds. Вложенный параллелизм trials × folds намеренно не поддерживается.
 
 ### Ранняя остановка
 
@@ -253,6 +258,8 @@ hp.fit(X, y, groups=groups)
 - `scoring`: метрика(и) для оценки (строка, функция, список или словарь).
 - `cv`: int, сплиттер кросс‑валидации или итерируемый объект (по умолчанию=5).
 - `n_jobs`: количество параллельных jobs (по умолчанию=1).
+- `parallelism`: `"trials"` (по умолчанию) или `"folds"`; `n_jobs` работает только по одной оси.
+- `inner_max_num_threads`: опциональный лимит native threads для process-parallel trials.
 - `pre_dispatch`: управляет количеством одновременно запускаемых jobs (по умолчанию='2*n_jobs').
 - `error_score`: значение, присваиваемое при ошибке (по умолчанию=np.nan).
 - `early_stopping_patience`: количество итераций без улучшений для досрочной остановки (по умолчанию=None, отключено).
