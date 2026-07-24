@@ -58,7 +58,7 @@ def test_migrates_zero_version_database(tmp_path):
         study_id = store.open_study(identity())
         assert store.commit_trial(study_id, {"C": 0.1}, result())
     connection = sqlite3.connect(path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
     connection.close()
 
 

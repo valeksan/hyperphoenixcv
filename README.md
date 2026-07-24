@@ -166,11 +166,27 @@ hp = HyperPhoenixCV(
 )
 ```
 
-Optuna trials use real `ask`/`tell`; completed, failed, and pruned results are
-replayed from SQLite on resume. `n_trials` caps terminal trials across resume.
-For conditional spaces, pass a `search_space(trial) -> dict` callable plus a
-stable `search_space_id`. Multi-objective and fold-level pruning are not yet
-exposed by `HyperPhoenixCV`.
+Optuna trials use real `ask`/`tell`; terminal results replay from SQLite on
+resume. `n_trials` caps terminal trials across resume. Conditional spaces need
+`search_space(trial) -> dict` plus stable `search_space_id`.
+
+Multi-objective mode requires explicit directions and exposes `pareto_front_`.
+Use `refit=False`, metric name, or selector callable; `refit=True` is invalid.
+
+```python
+hp = HyperPhoenixCV(
+    estimator=model, param_grid=None, strategy="optuna", search_space=space,
+    n_trials=40, scoring=["accuracy", "neg_log_loss"],
+    optuna_directions={"accuracy": "maximize", "neg_log_loss": "maximize"},
+    refit=False,
+)
+```
+
+Plain sklearn CV never prunes mid-fit. Cooperative `intermediate_evaluator`
+receives `(estimator, X, y, params, report, groups, fit_params)`. Call
+`report(step, value)` with increasing integer steps; it returns prune request.
+Evaluator stops safely then returns `{"trial_state": "pruned"}`. Replay means
+same seed + committed history, not changed Optuna version or batch size.
 
 ### Random Search
 

@@ -126,6 +126,8 @@ class HyperPhoenixCV(BaseEstimator):
         search_space_id: str | None = None,
         n_trials: int | None = None,
         optuna_warmup_trials: int = 10,
+        optuna_directions: Mapping[str, str] | None = None,
+        intermediate_evaluator=None,
         trial_timeout: float | None = None,
         cancel_callback=None,
         memmap_max_nbytes: int | str | None = "1M",
@@ -211,6 +213,8 @@ class HyperPhoenixCV(BaseEstimator):
         self.search_space_id = search_space_id
         self.n_trials = n_trials
         self.optuna_warmup_trials = optuna_warmup_trials
+        self.optuna_directions = optuna_directions
+        self.intermediate_evaluator = intermediate_evaluator
         self.trial_timeout = trial_timeout
         self.cancel_callback = cancel_callback
         self.memmap_max_nbytes = memmap_max_nbytes
@@ -240,6 +244,7 @@ class HyperPhoenixCV(BaseEstimator):
             search_space=self.search_space,
             n_trials=self.n_trials,
             optuna_warmup_trials=self.optuna_warmup_trials,
+            optuna_directions=(self.optuna_directions or {self._scoring[0]: "maximize"}),
         )
         self.result_manager = ResultManager(
             scoring=self._scoring,
@@ -262,10 +267,15 @@ class HyperPhoenixCV(BaseEstimator):
         ):
             self.__dict__.pop(name, None)
 
+    def _is_multi_objective(self) -> bool:
+        return self.strategy == "optuna" and self.optuna_directions is not None and len(self.optuna_directions) > 1
+
     def _validate_refit(self) -> None:
         """Validate supported sklearn refit forms before creating a study."""
         metrics = self._scoring
         if isinstance(self.refit, bool):
+            if self._is_multi_objective() and self.refit:
+                raise ValueError("Multi-objective Optuna search requires refit=False, a metric name, or a callable")
             if self.refit and len(metrics) > 1:
                 raise ValueError(
                     "For multi-metric scoring, refit must be a scorer name, callable, or False."
@@ -280,10 +290,21 @@ class HyperPhoenixCV(BaseEstimator):
         raise ValueError("refit must be bool, scorer name, or callable")
 
     def _validate_strategy(self) -> None:
-        if self.strategy == "optuna" and len(self._scoring) != 1:
-            raise ValueError(
-                "strategy='optuna' currently supports one scoring metric; multi-objective search is not exposed"
-            )
+        if self.optuna_directions is not None:
+            if self.strategy != "optuna":
+                raise ValueError("optuna_directions requires strategy='optuna'")
+            if not isinstance(self.optuna_directions, Mapping):
+                raise TypeError("optuna_directions must be a mapping")
+            if set(self.optuna_directions) != set(self._scoring):
+                raise ValueError("optuna_directions keys must exactly match scoring metric names")
+            if any(value not in {"maximize", "minimize"} for value in self.optuna_directions.values()):
+                raise ValueError("optuna_directions values must be 'maximize' or 'minimize'")
+        elif self.strategy == "optuna" and len(self._scoring) != 1:
+            raise ValueError("multi-metric Optuna requires optuna_directions")
+        if self.intermediate_evaluator is not None and not callable(self.intermediate_evaluator):
+            raise TypeError("intermediate_evaluator must be callable or None")
+        if self.intermediate_evaluator is not None and self.strategy != "optuna":
+            raise ValueError("intermediate_evaluator requires strategy='optuna'")
 
     def _worker_count(self) -> int:
         if self.n_jobs == 0:
@@ -316,6 +337,28 @@ class HyperPhoenixCV(BaseEstimator):
         self.study_store.update_study_state(self.study_id, state)
 
     def _evaluate_batch(self, proposals, X, y, groups, fit_params):
+        if self.intermediate_evaluator is not None:
+            # Cooperative path only. sklearn cross_validate has no honest
+            # mid-fit signal, hence plain CV never receives a prune request.
+            output = []
+            for params in proposals:
+                reporter = self.search_strategy.intermediate_reporter(params)
+                try:
+                    result = self.intermediate_evaluator(
+                        self.estimator, X, y, params, reporter, groups, fit_params or {}
+                    )
+                    if not isinstance(result, dict):
+                        raise TypeError("intermediate_evaluator must return a result dictionary")
+                    result.setdefault("params", params)
+                    diagnostics = result.setdefault("trial_diagnostics", {})
+                    if not isinstance(diagnostics, dict):
+                        raise TypeError("trial_diagnostics must be a dictionary")
+                    diagnostics.setdefault("intermediate_reports", reporter.diagnostics)
+                except Exception as exc:
+                    result = {"params": params, "error": str(exc), "error_type": type(exc).__name__,
+                              "trial_diagnostics": {"intermediate_reports": reporter.diagnostics}}
+                output.append(result)
+            return output
         kwargs = [
             {
                 "estimator": self.estimator, "X": X, "y": y,
@@ -418,6 +461,7 @@ class HyperPhoenixCV(BaseEstimator):
             "n_iter": self.n_iter,
             "n_trials": self.n_trials,
             "optuna_warmup_trials": self.optuna_warmup_trials,
+            "optuna_directions": dict(self.optuna_directions) if self.optuna_directions is not None else None,
             "early_stopping_patience": self.early_stopping_patience,
             "parallelism": self.parallelism,
             "trial_timeout": self.trial_timeout,
@@ -595,6 +639,12 @@ class HyperPhoenixCV(BaseEstimator):
                 metadata_fn = getattr(self.search_strategy, "result_metadata", None)
                 if metadata_fn is not None:
                     result.update(metadata_fn(params))
+                if (self.strategy == "optuna" and "error" not in result
+                        and result.get("trial_state") != "pruned" and "objective_values" not in result):
+                    directions = self.optuna_directions or {self._scoring[0]: "maximize"}
+                    result["objective_values"] = {
+                        name: result[f"mean_test_{name}"] for name in directions
+                    }
                 if self.study_store.commit_trial(self.study_id, params, result):
                     self.result_manager.add_result(result)
                     self.search_strategy.tell([result])
@@ -641,6 +691,7 @@ class HyperPhoenixCV(BaseEstimator):
 
         # Update attributes for compatibility with GridSearchCV
         self.cv_results_ = self.result_manager.format_cv_results()
+        self.pareto_front_ = self._pareto_front() if self._is_multi_objective() else []
         self._update_best_attributes()
 
         # Refit the best estimator on the whole dataset
@@ -661,6 +712,8 @@ class HyperPhoenixCV(BaseEstimator):
 
     def _update_best_attributes(self):
         """Set best_params_, best_score_, and best_index_ from result_manager."""
+        if self._is_multi_objective() and self.refit is False:
+            return
         valid_results = [r for r in self.result_manager.results if 'error' not in r]
         if not valid_results:
             return
@@ -683,6 +736,37 @@ class HyperPhoenixCV(BaseEstimator):
 
         if not self.cv_results_ or 'params' not in self.cv_results_:
             self.best_index_ = None
+
+    def _pareto_front(self) -> list[dict]:
+        """Completed non-dominated Optuna trials in durable trial order."""
+        directions = self.optuna_directions or {}
+        candidates = [
+            (index, result) for index, result in enumerate(self.result_manager.results)
+            if result.get("trial_state", "completed") == "completed"
+            and "error" not in result and "objective_values" in result
+        ]
+        front = []
+        for index, result in candidates:
+            values = result["objective_values"]
+            dominated = False
+            for other_index, other in candidates:
+                if other_index == index:
+                    continue
+                other_values = other["objective_values"]
+                no_worse = all(
+                    other_values[name] >= values[name] if direction == "maximize" else other_values[name] <= values[name]
+                    for name, direction in directions.items()
+                )
+                better = any(
+                    other_values[name] > values[name] if direction == "maximize" else other_values[name] < values[name]
+                    for name, direction in directions.items()
+                )
+                if no_worse and better:
+                    dominated = True
+                    break
+            if not dominated:
+                front.append({"trial_index": index, "params": result["params"], "objective_values": values})
+        return front
 
     def predict(self, X):
         """

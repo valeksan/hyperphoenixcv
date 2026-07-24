@@ -14,7 +14,7 @@ from uuid import uuid4
 from ..study_identity import StudyIdentity, canonicalize, mismatch_fields, param_key
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class StudyStoreError(ValueError):
@@ -130,10 +130,12 @@ class SQLiteStudyStore:
                         trial_id INTEGER PRIMARY KEY,
                         study_id TEXT NOT NULL REFERENCES studies(study_id) ON DELETE CASCADE,
                         sequence INTEGER NOT NULL,
-                        state TEXT NOT NULL CHECK(state IN ('completed', 'failed', 'pruned')),
+                        state TEXT NOT NULL CHECK(state IN ('completed', 'failed', 'pruned', 'cancelled')),
                         param_key TEXT NOT NULL,
                         params_json TEXT NOT NULL,
                         result_json TEXT NOT NULL,
+                        objective_values_json TEXT,
+                        diagnostics_json TEXT,
                         exception_type TEXT,
                         exception_message TEXT,
                         created_at TEXT NOT NULL,
@@ -164,7 +166,7 @@ class SQLiteStudyStore:
                 columns = {row[1] for row in conn.execute("PRAGMA table_info(studies)")}
                 if "state_json" not in columns:
                     conn.execute("ALTER TABLE studies ADD COLUMN state_json TEXT NOT NULL DEFAULT '{}'")
-                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                conn.execute("PRAGMA user_version = 3")
             version = 3
         if version == 3:
             # SQLite cannot alter a CHECK constraint in place. Preserve all
@@ -187,11 +189,42 @@ class SQLiteStudyStore:
                         UNIQUE(study_id, sequence)
                     )
                 """)
-                conn.execute("INSERT INTO trials_new SELECT * FROM trials")
+                conn.execute("""INSERT INTO trials_new (
+                    trial_id, study_id, sequence, state, param_key, params_json,
+                    result_json, exception_type, exception_message, created_at, updated_at
+                ) SELECT trial_id, study_id, sequence, state, param_key, params_json,
+                    result_json, exception_type, exception_message, created_at, updated_at FROM trials""")
                 conn.execute("DROP TABLE trials")
                 conn.execute("ALTER TABLE trials_new RENAME TO trials")
                 conn.execute("CREATE INDEX trials_study_sequence_idx ON trials(study_id, sequence)")
                 conn.execute("PRAGMA user_version = 4")
+            version = 4
+        if version == 4:
+            # Vector objectives and pruning/cancellation diagnostics are
+            # queryable fields; result_json remains old-reader compatible.
+            with self._transaction() as conn:
+                conn.execute("""
+                    CREATE TABLE trials_new (
+                        trial_id INTEGER PRIMARY KEY,
+                        study_id TEXT NOT NULL REFERENCES studies(study_id) ON DELETE CASCADE,
+                        sequence INTEGER NOT NULL,
+                        state TEXT NOT NULL CHECK(state IN ('completed', 'failed', 'pruned', 'cancelled')),
+                        param_key TEXT NOT NULL, params_json TEXT NOT NULL, result_json TEXT NOT NULL,
+                        objective_values_json TEXT, diagnostics_json TEXT,
+                        exception_type TEXT, exception_message TEXT,
+                        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                        UNIQUE(study_id, param_key), UNIQUE(study_id, sequence)
+                    )
+                """)
+                conn.execute("""INSERT INTO trials_new (
+                    trial_id, study_id, sequence, state, param_key, params_json, result_json,
+                    exception_type, exception_message, created_at, updated_at
+                ) SELECT trial_id, study_id, sequence, state, param_key, params_json, result_json,
+                    exception_type, exception_message, created_at, updated_at FROM trials""")
+                conn.execute("DROP TABLE trials")
+                conn.execute("ALTER TABLE trials_new RENAME TO trials")
+                conn.execute("CREATE INDEX trials_study_sequence_idx ON trials(study_id, sequence)")
+                conn.execute("PRAGMA user_version = 5")
 
     @staticmethod
     def _identity(row: sqlite3.Row) -> StudyIdentity:
@@ -267,16 +300,25 @@ class SQLiteStudyStore:
 
     def results(self, study_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute(
-            "SELECT result_json FROM trials WHERE study_id = ? ORDER BY sequence", (study_id,)
+            "SELECT result_json, state, objective_values_json, diagnostics_json "
+            "FROM trials WHERE study_id = ? ORDER BY sequence", (study_id,)
         ).fetchall()
-        return [_restore(json.loads(row["result_json"])) for row in rows]
+        results = []
+        for row in rows:
+            result = _restore(json.loads(row["result_json"]))
+            if row["objective_values_json"] is not None:
+                result.setdefault("objective_values", _restore(json.loads(row["objective_values_json"])))
+            if row["diagnostics_json"] is not None:
+                result.setdefault("trial_diagnostics", _restore(json.loads(row["diagnostics_json"])))
+            results.append(result)
+        return results
 
     def commit_trial(self, study_id: str, params: dict[str, Any], result: dict[str, Any]) -> bool:
         """Atomically store terminal trial. False means same param already committed."""
         params_key, now = param_key(params), _now()
         state = str(result.get("trial_state", "failed" if "error" in result else "completed")).lower()
-        if state not in {"completed", "failed", "pruned"}:
-            raise ValueError("trial_state must be 'completed', 'failed', or 'pruned'")
+        if state not in {"completed", "failed", "pruned", "cancelled"}:
+            raise ValueError("trial_state must be 'completed', 'failed', 'pruned', or 'cancelled'")
         with self._transaction() as conn:
             exists = conn.execute(
                 "SELECT 1 FROM trials WHERE study_id = ? AND param_key = ?", (study_id, params_key)
@@ -289,9 +331,11 @@ class SQLiteStudyStore:
             conn.execute(
                 """INSERT INTO trials (
                     study_id, sequence, state, param_key, params_json, result_json,
-                    exception_type, exception_message, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    objective_values_json, diagnostics_json, exception_type, exception_message, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (study_id, sequence, state, params_key, _json(params), _json(result),
+                 _json(result["objective_values"]) if "objective_values" in result else None,
+                 _json(result.get("trial_diagnostics")) if result.get("trial_diagnostics") is not None else None,
                  type(result.get("error")).__name__ if "error" in result else None,
                  str(result["error"]) if "error" in result else None, now, now),
             )

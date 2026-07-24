@@ -189,6 +189,7 @@ class OptunaSearchStrategy(SearchStrategy):
         n_trials: int,
         random_state: Optional[int] = None,
         warmup_trials: int = 10,
+        directions: Mapping[str, str] | None = None,
     ):
         super().__init__({})
         if n_trials < 0:
@@ -217,6 +218,9 @@ class OptunaSearchStrategy(SearchStrategy):
         self.n_trials = n_trials
         self.random_state = random_state
         self.warmup_trials = warmup_trials
+        self.directions = dict(directions or {"score": "maximize"})
+        if not self.directions or any(value not in {"maximize", "minimize"} for value in self.directions.values()):
+            raise ValueError("optuna directions must map objectives to 'maximize' or 'minimize'")
         self.study = None
         self._trials_by_key: dict[str, Any] = {}
         self._terminal_count = 0
@@ -225,7 +229,17 @@ class OptunaSearchStrategy(SearchStrategy):
         sampler = self.optuna.samplers.TPESampler(
             seed=self.random_state, n_startup_trials=self.warmup_trials,
         )
-        return self.optuna.create_study(direction="maximize", sampler=sampler)
+        values = list(self.directions.values())
+        if len(values) == 1:
+            return self.optuna.create_study(direction=values[0], sampler=sampler)
+        return self.optuna.create_study(directions=values, sampler=sampler)
+
+    def _objective_values(self, result: Dict[str, Any]):
+        values = result.get("objective_values")
+        if values is not None:
+            return [float(values[name]) for name in self.directions]
+        return [float(result.get(f"mean_test_{name}", result.get("mean_test_score", float("nan"))))
+                for name in self.directions]
 
     def _suggest(self, trial) -> Dict[str, Any]:
         if callable(self.search_space):
@@ -277,18 +291,14 @@ class OptunaSearchStrategy(SearchStrategy):
                 frozen = trial_module.create_trial(
                     params=params, distributions=distributions, state=trial_module.TrialState.PRUNED,
                 )
-            elif state == "failed" or "error" in result:
+            elif state in {"failed", "cancelled"} or "error" in result:
                 frozen = trial_module.create_trial(
                     params=params, distributions=distributions, state=trial_module.TrialState.FAIL,
                 )
             else:
-                score = result.get("mean_test_score")
-                if score is None:
-                    scores = [value for key, value in result.items() if key.startswith("mean_test_")]
-                    score = scores[0] if scores else float("nan")
-                frozen = trial_module.create_trial(
-                    params=params, distributions=distributions, value=float(score),
-                )
+                values = self._objective_values(result)
+                frozen = trial_module.create_trial(params=params, distributions=distributions,
+                    **({"value": values[0]} if len(values) == 1 else {"values": values}))
             self.study.add_trial(frozen)
             self._known_param_keys.add(param_key(params))
 
@@ -326,6 +336,32 @@ class OptunaSearchStrategy(SearchStrategy):
             }
         }
 
+    def intermediate_reporter(self, params: Dict[str, Any]):
+        """Return ``report(step, value) -> should_prune`` for one live trial.
+
+        Optuna itself has no multi-objective intermediate-value API, so this is
+        intentionally available only for scalar studies.
+        """
+        trial = self._trials_by_key.get(param_key(params))
+        if trial is None:
+            raise RuntimeError("No live Optuna trial for intermediate report")
+        if len(self.directions) != 1:
+            raise ValueError("Optuna pruning is available only for scalar objectives")
+        last_step = -1
+        reports = []
+        def report(step: int, value: float) -> bool:
+            nonlocal last_step
+            if not isinstance(step, (int, np.integer)) or step <= last_step:
+                raise ValueError("intermediate report step must be monotonically increasing")
+            last_step = int(step)
+            value = float(value)
+            trial.report(value, last_step)
+            should_prune = bool(trial.should_prune())
+            reports.append({"step": last_step, "value": value, "should_prune": should_prune})
+            return should_prune
+        report.diagnostics = reports
+        return report
+
     def tell(self, results: List[Dict[str, Any]]) -> None:
         for result in results:
             params = result.get("params")
@@ -338,14 +374,11 @@ class OptunaSearchStrategy(SearchStrategy):
             state = str(result.get("trial_state", "failed" if "error" in result else "completed")).lower()
             if state == "pruned":
                 self.study.tell(trial, state=self.optuna.trial.TrialState.PRUNED)
-            elif state == "failed" or "error" in result:
+            elif state in {"failed", "cancelled"} or "error" in result:
                 self.study.tell(trial, state=self.optuna.trial.TrialState.FAIL)
             else:
-                score = result.get("mean_test_score")
-                if score is None:
-                    scores = [value for name, value in result.items() if name.startswith("mean_test_")]
-                    score = scores[0] if scores else float("nan")
-                self.study.tell(trial, float(score))
+                values = self._objective_values(result)
+                self.study.tell(trial, values[0] if len(values) == 1 else values)
             self._terminal_count += 1
 
 
@@ -475,6 +508,7 @@ def create_search_strategy(
     search_space: Mapping[str, Any] | Callable[[Any], Dict[str, Any]] | None = None,
     n_trials: int | None = None,
     optuna_warmup_trials: int = 10,
+    optuna_directions: Mapping[str, str] | None = None,
 ) -> SearchStrategy:
     """
     Factory function to create a search strategy based on configuration.
@@ -494,6 +528,7 @@ def create_search_strategy(
             n_trials=n_iter if n_trials is None else n_trials,
             random_state=random_state,
             warmup_trials=optuna_warmup_trials,
+            directions=optuna_directions,
         )
     if search_space is not None:
         raise ValueError("search_space is supported only with strategy='optuna'")

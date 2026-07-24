@@ -166,11 +166,16 @@ hp = HyperPhoenixCV(
 )
 ```
 
-Optuna использует настоящий `ask`/`tell`; completed, failed, pruned trials
-восстанавливаются из SQLite. `n_trials` ограничивает terminal trials, включая
-resume. Для conditional space передайте `search_space(trial) -> dict` и
-стабильный `search_space_id`. Multi-objective и fold-level pruning пока не
-экспортированы через `HyperPhoenixCV`.
+Optuna использует настоящий `ask`/`tell`; terminal trials восстанавливаются из
+SQLite. `n_trials` ограничивает trials, включая resume. Для conditional space
+нужны `search_space(trial) -> dict` и стабильный `search_space_id`.
+
+Multi-objective требует `optuna_directions`, публикует `pareto_front_`.
+Используйте `refit=False`, имя метрики или callable; `refit=True` запрещён.
+Обычный sklearn CV не делает mid-fit pruning. Cooperative
+`intermediate_evaluator(estimator, X, y, params, report, groups, fit_params)`
+вызывает `report(step, value)` с возрастающими шагами; `True` -> безопасно
+остановить работу, вернуть `{"trial_state": "pruned"}`.
 
 ### Случайный поиск
 
