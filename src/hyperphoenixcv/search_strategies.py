@@ -4,7 +4,7 @@ Search strategies for hyperparameter optimization.
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping
-from typing import List, Dict, Any, Optional, Protocol
+from typing import Callable, List, Dict, Any, Optional, Protocol
 import warnings
 import numpy as np
 import pandas as pd
@@ -173,6 +173,182 @@ class RandomSearchStrategy(SearchStrategy):
         return min(max(self.n_iter, 0), len(ParameterGrid(self.param_grid)))
 
 
+class OptunaSearchStrategy(SearchStrategy):
+    """Optional genuine Optuna ask/tell adapter.
+
+    ``search_space`` is either a mapping of Optuna distributions or a callable
+    receiving an Optuna ``Trial`` and returning estimator parameters. Callable
+    spaces support conditional suggestions. SQLite remains source of truth: a
+    fresh in-memory Optuna study is rebuilt from committed terminal trials on
+    every resume.
+    """
+
+    def __init__(
+        self,
+        search_space: Mapping[str, Any] | Callable[[Any], Dict[str, Any]],
+        n_trials: int,
+        random_state: Optional[int] = None,
+        warmup_trials: int = 10,
+    ):
+        super().__init__({})
+        if n_trials < 0:
+            raise ValueError("n_trials must be non-negative")
+        if warmup_trials < 0:
+            raise ValueError("optuna_warmup_trials must be non-negative")
+        try:
+            import optuna
+        except ImportError as exc:
+            raise ImportError(
+                "Optuna strategy requires optional dependency. Install with "
+                "`pip install hyperphoenixcv[optuna]`."
+            ) from exc
+        if not isinstance(search_space, Mapping) and not callable(search_space):
+            raise TypeError("search_space must be an Optuna distribution mapping or callable")
+        if isinstance(search_space, Mapping):
+            base = optuna.distributions.BaseDistribution
+            invalid = [name for name, value in search_space.items() if not isinstance(value, base)]
+            if invalid:
+                raise TypeError(
+                    "Optuna mapping values must be optuna distributions; invalid: "
+                    + ", ".join(map(str, invalid))
+                )
+        self.optuna = optuna
+        self.search_space = search_space
+        self.n_trials = n_trials
+        self.random_state = random_state
+        self.warmup_trials = warmup_trials
+        self.study = None
+        self._trials_by_key: dict[str, Any] = {}
+        self._terminal_count = 0
+
+    def _new_study(self):
+        sampler = self.optuna.samplers.TPESampler(
+            seed=self.random_state, n_startup_trials=self.warmup_trials,
+        )
+        return self.optuna.create_study(direction="maximize", sampler=sampler)
+
+    def _suggest(self, trial) -> Dict[str, Any]:
+        if callable(self.search_space):
+            params = self.search_space(trial)
+            if not isinstance(params, dict):
+                raise TypeError("Optuna search_space callable must return dict[str, Any]")
+            return params
+        return {
+            name: trial._suggest(name, distribution)
+            for name, distribution in self.search_space.items()
+        }
+
+    def generate_parameters(self) -> List[Dict[str, Any]]:
+        self.restore([])
+        return self.ask(self.n_trials)
+
+    def iter_parameters(self) -> Iterator[Dict[str, Any]]:
+        self.restore([])
+        while params := self.ask(1):
+            yield params[0]
+
+    def total_candidates(self) -> int:
+        return self.n_trials
+
+    def restore(self, results: List[Dict[str, Any]]) -> None:
+        self._known_param_keys = set()
+        self._trials_by_key = {}
+        self._terminal_count = len(results)
+        self.study = self._new_study()
+        trial_module = self.optuna.trial
+        for result in results:
+            params = result.get("params")
+            if params is None:
+                continue
+            distributions = result.get("optuna_distributions")
+            if distributions is not None:
+                distributions = {
+                    name: self.optuna.distributions.json_to_distribution(value)
+                    for name, value in distributions.items()
+                }
+            elif isinstance(self.search_space, Mapping):
+                distributions = dict(self.search_space)
+            else:
+                raise ValueError(
+                    "Cannot resume callable Optuna search_space trial without persisted distributions"
+                )
+            state = str(result.get("trial_state", "failed" if "error" in result else "completed")).lower()
+            if state == "pruned":
+                frozen = trial_module.create_trial(
+                    params=params, distributions=distributions, state=trial_module.TrialState.PRUNED,
+                )
+            elif state == "failed" or "error" in result:
+                frozen = trial_module.create_trial(
+                    params=params, distributions=distributions, state=trial_module.TrialState.FAIL,
+                )
+            else:
+                score = result.get("mean_test_score")
+                if score is None:
+                    scores = [value for key, value in result.items() if key.startswith("mean_test_")]
+                    score = scores[0] if scores else float("nan")
+                frozen = trial_module.create_trial(
+                    params=params, distributions=distributions, value=float(score),
+                )
+            self.study.add_trial(frozen)
+            self._known_param_keys.add(param_key(params))
+
+    def ask(self, n: int) -> List[Dict[str, Any]]:
+        if n < 1 or self._terminal_count + len(self._trials_by_key) >= self.n_trials:
+            return []
+        if self.study is None:
+            self.restore([])
+        proposals = []
+        # Finite categorical spaces can repeat. Bound retries so caller cannot
+        # hang when SQLite's unique parameter contract exhausts a space.
+        attempts_left = max(100, (self.n_trials - self._terminal_count) * 20)
+        while len(proposals) < n and self._terminal_count + len(self._trials_by_key) < self.n_trials and attempts_left:
+            attempts_left -= 1
+            trial = self.study.ask()
+            params = self._suggest(trial)
+            key = param_key(params)
+            if key in self._known_param_keys:
+                self.study.tell(trial, state=self.optuna.trial.TrialState.PRUNED)
+                continue
+            self._known_param_keys.add(key)
+            self._trials_by_key[key] = trial
+            proposals.append(params)
+        return proposals
+
+    def result_metadata(self, params: Dict[str, Any]) -> dict[str, Any]:
+        """JSON-safe Optuna trial data needed for deterministic replay."""
+        trial = self._trials_by_key.get(param_key(params))
+        if trial is None:
+            return {}
+        return {
+            "optuna_distributions": {
+                name: self.optuna.distributions.distribution_to_json(distribution)
+                for name, distribution in trial.distributions.items()
+            }
+        }
+
+    def tell(self, results: List[Dict[str, Any]]) -> None:
+        for result in results:
+            params = result.get("params")
+            if params is None:
+                continue
+            key = param_key(params)
+            trial = self._trials_by_key.pop(key, None)
+            if trial is None:
+                continue
+            state = str(result.get("trial_state", "failed" if "error" in result else "completed")).lower()
+            if state == "pruned":
+                self.study.tell(trial, state=self.optuna.trial.TrialState.PRUNED)
+            elif state == "failed" or "error" in result:
+                self.study.tell(trial, state=self.optuna.trial.TrialState.FAIL)
+            else:
+                score = result.get("mean_test_score")
+                if score is None:
+                    scores = [value for name, value in result.items() if name.startswith("mean_test_")]
+                    score = scores[0] if scores else float("nan")
+                self.study.tell(trial, float(score))
+            self._terminal_count += 1
+
+
 class ExperimentalSurrogateRankingStrategy(SearchStrategy):
     """
     Experimental surrogate-ranking strategy. This is not Bayesian optimization:
@@ -287,18 +463,63 @@ BayesianSearchStrategy = ExperimentalSurrogateRankingStrategy
 
 
 def create_search_strategy(
-    param_grid: Mapping[str, Any] | List[Dict[str, Any]],
+    param_grid: Mapping[str, Any] | List[Dict[str, Any]] | None,
     random_search: bool = False,
     use_bayesian_optimization: bool = False,
     n_iter: int = 10,
     random_state: Optional[int] = None,
     bayesian_optimizer = None,
     scoring: str = 'f1',
+    *,
+    strategy: str | None = None,
+    search_space: Mapping[str, Any] | Callable[[Any], Dict[str, Any]] | None = None,
+    n_trials: int | None = None,
+    optuna_warmup_trials: int = 10,
 ) -> SearchStrategy:
     """
     Factory function to create a search strategy based on configuration.
     Maintains backward compatibility with HyperPhoenixCV parameters.
     """
+    if strategy is not None and strategy not in {
+        "grid", "random", "optuna", "experimental_surrogate_ranking",
+    }:
+        raise ValueError("strategy must be 'grid', 'random', 'optuna', or 'experimental_surrogate_ranking'")
+    if strategy == "optuna":
+        if random_search or use_bayesian_optimization or bayesian_optimizer is not None:
+            raise ValueError("strategy='optuna' conflicts with legacy search settings")
+        if search_space is None:
+            raise ValueError("strategy='optuna' requires search_space")
+        return OptunaSearchStrategy(
+            search_space=search_space,
+            n_trials=n_iter if n_trials is None else n_trials,
+            random_state=random_state,
+            warmup_trials=optuna_warmup_trials,
+        )
+    if search_space is not None:
+        raise ValueError("search_space is supported only with strategy='optuna'")
+    if param_grid is None:
+        raise ValueError("param_grid is required unless strategy='optuna'")
+    if strategy == "random":
+        if use_bayesian_optimization or bayesian_optimizer is not None:
+            raise ValueError("strategy='random' conflicts with Bayesian compatibility settings")
+        if n_trials is not None:
+            if n_iter != 10 and n_iter != n_trials:
+                raise ValueError("n_trials conflicts with legacy n_iter")
+            n_iter = n_trials
+        random_search = True
+    if strategy == "grid":
+        if random_search or use_bayesian_optimization or bayesian_optimizer is not None:
+            raise ValueError("strategy='grid' conflicts with legacy search settings")
+    if strategy == "experimental_surrogate_ranking":
+        if random_search:
+            raise ValueError("strategy='experimental_surrogate_ranking' conflicts with random_search")
+        use_bayesian_optimization = True
+    if random_search and strategy is None:
+        warnings.warn(
+            "random_search is deprecated; use strategy='random' and n_trials instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
     if use_bayesian_optimization:
         warnings.warn(
             "use_bayesian_optimization is deprecated: current surrogate mode is not "

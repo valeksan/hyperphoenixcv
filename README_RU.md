@@ -131,17 +131,46 @@ print(report)  # imported/skipped/failed и детали невалидных з
 
 `use_bayesian_optimization=True` — временный compatibility API. Это **не**
 байесовская оптимизация: нет acquisition function или последовательного
-байесовского sampler. Используйте seeded random search до появления Optuna:
+байесовского sampler. Используйте seeded random search или настоящий Optuna ask/tell:
 
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    random_search=True,
-    n_iter=30,
+    strategy="random",
+    n_trials=30,
     verbose=True
 )
 ```
+
+Установите optional backend:
+
+```bash
+pip install "hyperphoenixcv[optuna]"
+```
+
+```python
+import optuna
+
+hp = HyperPhoenixCV(
+    estimator=model,
+    param_grid=None,
+    strategy="optuna",
+    search_space={
+        "C": optuna.distributions.FloatDistribution(1e-4, 10, log=True),
+        "penalty": optuna.distributions.CategoricalDistribution(["l1", "l2"]),
+    },
+    n_trials=30,
+    optuna_warmup_trials=10,
+    random_state=42,
+)
+```
+
+Optuna использует настоящий `ask`/`tell`; completed, failed, pruned trials
+восстанавливаются из SQLite. `n_trials` ограничивает terminal trials, включая
+resume. Для conditional space передайте `search_space(trial) -> dict` и
+стабильный `search_space_id`. Multi-objective и fold-level pruning пока не
+экспортированы через `HyperPhoenixCV`.
 
 ### Случайный поиск
 
@@ -151,8 +180,8 @@ hp = HyperPhoenixCV(
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    random_search=True,
-    n_iter=50           # Количество случайных комбинаций
+    strategy="random",
+    n_trials=50         # Количество случайных комбинаций
 )
 ```
 
@@ -260,6 +289,12 @@ hp.fit(X, y, groups=groups)
 - `n_jobs`: количество параллельных jobs (по умолчанию=1).
 - `parallelism`: `"trials"` (по умолчанию) или `"folds"`; `n_jobs` работает только по одной оси.
 - `inner_max_num_threads`: опциональный лимит native threads для process-parallel trials.
+- `trial_timeout`: optional timeout одного trial в секундах. Требует
+  `parallelism="trials"` и `n_jobs >= 2`; timeout trial сохраняется как failed.
+- `cancel_callback`: optional callable без аргументов. Верните `True` или строку
+  причины, чтобы остановиться до следующего не начатого trial.
+- `memmap_max_nbytes`, `memmap_temp_folder`, `joblib_batch_size`: настройки
+  joblib process backend; массивы больше default `"1M"` используют read-only memmap.
 - `pre_dispatch`: управляет количеством одновременно запускаемых jobs (по умолчанию='2*n_jobs').
 - `error_score`: значение, присваиваемое при ошибке (по умолчанию=np.nan).
 - `early_stopping_patience`: количество итераций без улучшений для досрочной остановки (по умолчанию=None, отключено).

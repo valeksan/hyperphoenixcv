@@ -2,6 +2,8 @@
 Unit tests for search strategies.
 """
 
+import importlib.util
+
 import pytest
 import numpy as np
 import random
@@ -242,7 +244,13 @@ class TestCreateSearchStrategy:
 
     def test_random_search(self):
         param_grid = {'a': [1, 2]}
-        strategy = create_search_strategy(param_grid, random_search=True, n_iter=5)
+        with pytest.warns(FutureWarning, match="random_search is deprecated"):
+            strategy = create_search_strategy(param_grid, random_search=True, n_iter=5)
+        assert isinstance(strategy, RandomSearchStrategy)
+        assert strategy.n_iter == 5
+
+    def test_explicit_random_strategy_needs_no_legacy_flag(self):
+        strategy = create_search_strategy({'a': [1, 2]}, strategy="random", n_trials=5)
         assert isinstance(strategy, RandomSearchStrategy)
         assert strategy.n_iter == 5
 
@@ -270,3 +278,42 @@ class TestCreateSearchStrategy:
         assert isinstance(strategy, BayesianSearchStrategy)
         assert strategy.scoring == 'f1'
         assert isinstance(strategy.model, RandomForestRegressor)
+
+    def test_optuna_requires_optional_dependency(self):
+        if importlib.util.find_spec("optuna") is not None:
+            pytest.skip("Optuna installed; optional-dependency failure path unavailable")
+        with pytest.raises(ImportError, match=r"hyperphoenixcv\[optuna\]"):
+            create_search_strategy(
+                None,
+                strategy="optuna",
+                search_space={"C": object()},
+                n_trials=2,
+            )
+
+
+@pytest.mark.skipif(importlib.util.find_spec("optuna") is None, reason="optional Optuna dependency")
+def test_optuna_adapter_replays_committed_trial_and_honors_total_budget():
+    import optuna
+    from src.hyperphoenixcv.search_strategies import OptunaSearchStrategy
+
+    space = {"C": optuna.distributions.FloatDistribution(1e-3, 1, log=True)}
+    strategy = OptunaSearchStrategy(space, n_trials=2, random_state=7, warmup_trials=1)
+    strategy.restore([])
+    params = strategy.ask(1)[0]
+    result = {"params": params, "mean_test_score": 0.7}
+    result.update(strategy.result_metadata(params))
+    strategy.tell([result])
+
+    resumed = OptunaSearchStrategy(space, n_trials=2, random_state=7, warmup_trials=1)
+    resumed.restore([result])
+    assert len(resumed.ask(2)) == 1
+
+
+def test_optuna_conflicts_with_legacy_search_flags_before_import():
+    with pytest.raises(ValueError, match="conflicts"):
+        create_search_strategy(
+            None,
+            strategy="optuna",
+            search_space={},
+            random_search=True,
+        )

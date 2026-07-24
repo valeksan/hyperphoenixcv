@@ -5,7 +5,7 @@ HyperPhoenixCV - Resumable hyperparameter search with checkpoint support.
 
 This module provides the HyperPhoenixCV class, which extends the functionality
 of scikit-learn's GridSearchCV by adding checkpoint support, random search,
-and an explicitly experimental surrogate-ranking compatibility mode.
+an optional Optuna backend, and experimental surrogate-ranking compatibility.
 """
 
 import warnings
@@ -54,7 +54,7 @@ def _early_stop_from_results(results: list[dict], metric: str) -> tuple[float, i
 class HyperPhoenixCV(BaseEstimator):
     """
     Resumable hyperparameter search with checkpoint support.
-    Supports exhaustive grid search, random search, and experimental surrogate ranking.
+    Supports grid/random search, optional Optuna search, and experimental surrogate ranking.
 
     Example usage:
     # Create an instance
@@ -97,7 +97,7 @@ class HyperPhoenixCV(BaseEstimator):
     def __init__(
         self,
         estimator,
-        param_grid: dict,
+        param_grid: dict | list[dict] | None = None,
         scoring: str | list[str] | Mapping[str, object] | object = 'f1',
         cv: int = 5,
         n_jobs: int = 1,
@@ -121,6 +121,16 @@ class HyperPhoenixCV(BaseEstimator):
         storage_path: str | None = None,
         parallelism: str = "trials",
         inner_max_num_threads: int | None = None,
+        strategy: str | None = None,
+        search_space=None,
+        search_space_id: str | None = None,
+        n_trials: int | None = None,
+        optuna_warmup_trials: int = 10,
+        trial_timeout: float | None = None,
+        cancel_callback=None,
+        memmap_max_nbytes: int | str | None = "1M",
+        memmap_temp_folder: str | None = None,
+        joblib_batch_size: int | str = "auto",
     ):
         """
         Initializes HyperPhoenixCV.
@@ -196,6 +206,16 @@ class HyperPhoenixCV(BaseEstimator):
         self.storage_path = storage_path
         self.parallelism = parallelism
         self.inner_max_num_threads = inner_max_num_threads
+        self.strategy = strategy
+        self.search_space = search_space
+        self.search_space_id = search_space_id
+        self.n_trials = n_trials
+        self.optuna_warmup_trials = optuna_warmup_trials
+        self.trial_timeout = trial_timeout
+        self.cancel_callback = cancel_callback
+        self.memmap_max_nbytes = memmap_max_nbytes
+        self.memmap_temp_folder = memmap_temp_folder
+        self.joblib_batch_size = joblib_batch_size
 
     @property
     def _scoring(self):
@@ -216,6 +236,10 @@ class HyperPhoenixCV(BaseEstimator):
             random_state=sampler_random_state if sampler_random_state is not None else self.random_state,
             bayesian_optimizer=self.bayesian_optimizer,
             scoring=self._scoring[0] if self._scoring else 'f1',
+            strategy=self.strategy,
+            search_space=self.search_space,
+            n_trials=self.n_trials,
+            optuna_warmup_trials=self.optuna_warmup_trials,
         )
         self.result_manager = ResultManager(
             scoring=self._scoring,
@@ -255,6 +279,12 @@ class HyperPhoenixCV(BaseEstimator):
             return
         raise ValueError("refit must be bool, scorer name, or callable")
 
+    def _validate_strategy(self) -> None:
+        if self.strategy == "optuna" and len(self._scoring) != 1:
+            raise ValueError(
+                "strategy='optuna' currently supports one scoring metric; multi-objective search is not exposed"
+            )
+
     def _worker_count(self) -> int:
         if self.n_jobs == 0:
             raise ValueError("n_jobs must not be 0")
@@ -268,6 +298,17 @@ class HyperPhoenixCV(BaseEstimator):
         self._worker_count()
         if self.inner_max_num_threads is not None and self.inner_max_num_threads < 1:
             raise ValueError("inner_max_num_threads must be a positive integer or None")
+        if self.trial_timeout is not None:
+            if self.trial_timeout <= 0:
+                raise ValueError("trial_timeout must be a positive number or None")
+            if self.parallelism != "trials" or self._worker_count() < 2:
+                raise ValueError("trial_timeout requires parallelism='trials' and n_jobs >= 2")
+        if self.joblib_batch_size != "auto" and (
+            not isinstance(self.joblib_batch_size, int) or self.joblib_batch_size < 1
+        ):
+            raise ValueError("joblib_batch_size must be 'auto' or a positive integer")
+        if self.cancel_callback is not None and not callable(self.cancel_callback):
+            raise ValueError("cancel_callback must be callable or None")
 
     def _update_study_state(self, patch: dict) -> None:
         state = self.study_store.study_state(self.study_id)
@@ -283,14 +324,29 @@ class HyperPhoenixCV(BaseEstimator):
             }
             for params in proposals
         ]
-        if len(kwargs) == 1:
+        if len(kwargs) == 1 and self.trial_timeout is None:
             return [_evaluate_trial(self.cv_executor, kwargs[0])]
         config = {
-            "backend": "loky", "n_jobs": len(kwargs),
+            "backend": "loky", "n_jobs": self._worker_count() if self.trial_timeout is not None else len(kwargs),
             "inner_max_num_threads": self.inner_max_num_threads,
+            "max_nbytes": self.memmap_max_nbytes,
+            "mmap_mode": "r",
+            "temp_folder": self.memmap_temp_folder,
         }
         with parallel_config(**config):
-            return Parallel()(delayed(_evaluate_trial)(self.cv_executor, item) for item in kwargs)
+            try:
+                return Parallel(timeout=self.trial_timeout, batch_size=self.joblib_batch_size)(
+                    delayed(_evaluate_trial)(self.cv_executor, item) for item in kwargs
+                )
+            except TimeoutError:
+                if len(kwargs) != 1:
+                    raise RuntimeError("scheduler timeout must evaluate exactly one trial")
+                return [{
+                    "params": kwargs[0]["params"],
+                    "error": f"trial exceeded timeout of {self.trial_timeout} seconds",
+                    "error_type": "TrialTimeout",
+                    "cancellation_reason": "trial_timeout",
+                }]
 
     def _format_metric_string(self, result: dict) -> str:
         """
@@ -358,10 +414,28 @@ class HyperPhoenixCV(BaseEstimator):
         return {
             "random_search": self.random_search,
             "use_bayesian_optimization": self.use_bayesian_optimization,
+            "strategy": self.strategy,
             "n_iter": self.n_iter,
+            "n_trials": self.n_trials,
+            "optuna_warmup_trials": self.optuna_warmup_trials,
             "early_stopping_patience": self.early_stopping_patience,
             "parallelism": self.parallelism,
+            "trial_timeout": self.trial_timeout,
+            "memmap_max_nbytes": self.memmap_max_nbytes,
+            "joblib_batch_size": self.joblib_batch_size,
         }
+
+    def _identity_search_space(self):
+        """Stable identity projection for optional Optuna spaces."""
+        if self.search_space is None:
+            return self.param_grid
+        if callable(self.search_space):
+            if self.search_space_id is None:
+                raise ValueError(
+                    "Callable search_space requires search_space_id for safe checkpoint resume"
+                )
+            return {"optuna_callable": self.search_space_id}
+        return {str(name): repr(distribution) for name, distribution in self.search_space.items()}
 
     def _fit_impl(self, X, y, groups=None, fit_params: dict | None = None):
         """
@@ -383,6 +457,7 @@ class HyperPhoenixCV(BaseEstimator):
         """
         self._reset_fit_state()
         self._validate_refit()
+        self._validate_strategy()
         self._validate_scheduler()
         if self.clear_checkpoint:
             warnings.warn(
@@ -399,7 +474,7 @@ class HyperPhoenixCV(BaseEstimator):
             )
         self._study_identity = StudyIdentity.create(
             estimator=self.estimator,
-            param_grid=self.param_grid,
+            param_grid=self._identity_search_space(),
             scoring=self.scoring,
             cv=self.cv,
             random_state=self.random_state,
@@ -414,12 +489,20 @@ class HyperPhoenixCV(BaseEstimator):
             self.study_store = SQLiteStudyStore(self._storage_path())
 
         self.study_id = self.study_store.open_study(self._study_identity, resume=self.resume)
+        existing_scheduler = self.study_store.study_state(self.study_id).get("scheduler", {})
         self._update_study_state({
             "scheduler": {
+                **existing_scheduler,
                 "parallelism": self.parallelism,
                 "n_jobs": self.n_jobs,
                 "worker_count": self._worker_count(),
                 "inner_max_num_threads": self.inner_max_num_threads,
+                "trial_timeout": self.trial_timeout,
+                "memmap_max_nbytes": self.memmap_max_nbytes,
+                "memmap_temp_folder": self.memmap_temp_folder,
+                "joblib_batch_size": self.joblib_batch_size,
+                "attempts": existing_scheduler.get("attempts", len(self.study_store.results(self.study_id))),
+                "cancellation_reason": existing_scheduler.get("cancellation_reason"),
             }
         })
         # ``ParameterSampler`` must replay exactly after a process crash.  A
@@ -469,7 +552,7 @@ class HyperPhoenixCV(BaseEstimator):
         best_score, no_improvement_count = _early_stop_from_results(
             checkpoint_results, primary_metric
         )
-        if early_stopping_enabled:
+        if early_stopping_enabled or self.trial_timeout is not None or self.cancel_callback is not None:
             saved_state = self.study_store.study_state(self.study_id).get("early_stopping", {})
             if (
                 saved_state.get("metric") == primary_metric
@@ -492,6 +575,15 @@ class HyperPhoenixCV(BaseEstimator):
             batch_size = 1
         i = 0
         while proposals_available:
+            if self.cancel_callback is not None:
+                cancellation = self.cancel_callback()
+                if cancellation:
+                    reason = cancellation if isinstance(cancellation, str) else "cancel_callback"
+                    scheduler = self.study_store.study_state(self.study_id).get("scheduler", {})
+                    self._update_study_state({"scheduler": {
+                        **scheduler, "cancellation_reason": reason,
+                    }})
+                    break
             proposals = self.search_strategy.ask(batch_size)
             if not proposals:
                 break
@@ -500,9 +592,18 @@ class HyperPhoenixCV(BaseEstimator):
                 i += 1
                 if self.verbose:
                     print(f"\n[{i}/{total_candidates}] Testing: {params}")
+                metadata_fn = getattr(self.search_strategy, "result_metadata", None)
+                if metadata_fn is not None:
+                    result.update(metadata_fn(params))
                 if self.study_store.commit_trial(self.study_id, params, result):
                     self.result_manager.add_result(result)
                     self.search_strategy.tell([result])
+                    scheduler = self.study_store.study_state(self.study_id).get("scheduler", {})
+                    self._update_study_state({"scheduler": {
+                        **scheduler,
+                        "attempts": scheduler.get("attempts", 0) + 1,
+                        "cancellation_reason": result.get("cancellation_reason"),
+                    }})
 
                 if self.verbose and 'error' not in result:
                     current_str = self._format_metric_string(result)
@@ -729,7 +830,7 @@ class HyperPhoenixCV(BaseEstimator):
         if hasattr(self, "_study_identity"):
             return self._study_identity
         return StudyIdentity.create(
-            estimator=self.estimator, param_grid=self.param_grid, scoring=self.scoring,
+            estimator=self.estimator, param_grid=self._identity_search_space(), scoring=self.scoring,
             cv=self.cv, random_state=self.random_state, dataset_id=self.dataset_id,
             scorer_id=self.scorer_id, cv_id=self.cv_id,
             strategy_config=self._strategy_identity_config(),

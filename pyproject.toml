@@ -37,6 +37,9 @@ test = [
   "pytest>=7",
   "pytest-cov>=4",
 ]
+optuna = [
+  "optuna>=3.0",
+]
 
 [project.urls]
 "Bug Tracker" = "https://github.com/valeksan/hyperphoenixcv/issues"

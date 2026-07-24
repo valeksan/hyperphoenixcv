@@ -14,7 +14,7 @@ from uuid import uuid4
 from ..study_identity import StudyIdentity, canonicalize, mismatch_fields, param_key
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class StudyStoreError(ValueError):
@@ -130,7 +130,7 @@ class SQLiteStudyStore:
                         trial_id INTEGER PRIMARY KEY,
                         study_id TEXT NOT NULL REFERENCES studies(study_id) ON DELETE CASCADE,
                         sequence INTEGER NOT NULL,
-                        state TEXT NOT NULL CHECK(state IN ('completed', 'failed')),
+                        state TEXT NOT NULL CHECK(state IN ('completed', 'failed', 'pruned')),
                         param_key TEXT NOT NULL,
                         params_json TEXT NOT NULL,
                         result_json TEXT NOT NULL,
@@ -165,6 +165,33 @@ class SQLiteStudyStore:
                 if "state_json" not in columns:
                     conn.execute("ALTER TABLE studies ADD COLUMN state_json TEXT NOT NULL DEFAULT '{}'")
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            version = 3
+        if version == 3:
+            # SQLite cannot alter a CHECK constraint in place. Preserve all
+            # committed rows while adding Optuna's terminal PRUNED state.
+            with self._transaction() as conn:
+                conn.execute("""
+                    CREATE TABLE trials_new (
+                        trial_id INTEGER PRIMARY KEY,
+                        study_id TEXT NOT NULL REFERENCES studies(study_id) ON DELETE CASCADE,
+                        sequence INTEGER NOT NULL,
+                        state TEXT NOT NULL CHECK(state IN ('completed', 'failed', 'pruned')),
+                        param_key TEXT NOT NULL,
+                        params_json TEXT NOT NULL,
+                        result_json TEXT NOT NULL,
+                        exception_type TEXT,
+                        exception_message TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        UNIQUE(study_id, param_key),
+                        UNIQUE(study_id, sequence)
+                    )
+                """)
+                conn.execute("INSERT INTO trials_new SELECT * FROM trials")
+                conn.execute("DROP TABLE trials")
+                conn.execute("ALTER TABLE trials_new RENAME TO trials")
+                conn.execute("CREATE INDEX trials_study_sequence_idx ON trials(study_id, sequence)")
+                conn.execute("PRAGMA user_version = 4")
 
     @staticmethod
     def _identity(row: sqlite3.Row) -> StudyIdentity:
@@ -247,7 +274,9 @@ class SQLiteStudyStore:
     def commit_trial(self, study_id: str, params: dict[str, Any], result: dict[str, Any]) -> bool:
         """Atomically store terminal trial. False means same param already committed."""
         params_key, now = param_key(params), _now()
-        state = "failed" if "error" in result else "completed"
+        state = str(result.get("trial_state", "failed" if "error" in result else "completed")).lower()
+        if state not in {"completed", "failed", "pruned"}:
+            raise ValueError("trial_state must be 'completed', 'failed', or 'pruned'")
         with self._transaction() as conn:
             exists = conn.execute(
                 "SELECT 1 FROM trials WHERE study_id = ? AND param_key = ?", (study_id, params_key)

@@ -131,17 +131,46 @@ print(report)  # imported/skipped/failed counts and invalid-record details
 
 `use_bayesian_optimization=True` remains temporary compatibility API only. It
 does **not** implement Bayesian optimization; do not use it for adaptive search.
-Use seeded random search until optional Optuna backend is available:
+Use seeded random search, or genuine Optuna ask/tell:
 
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    random_search=True,
-    n_iter=30,
+    strategy="random",
+    n_trials=30,
     verbose=True
 )
 ```
+
+Install optional backend first:
+
+```bash
+pip install "hyperphoenixcv[optuna]"
+```
+
+```python
+import optuna
+
+hp = HyperPhoenixCV(
+    estimator=model,
+    param_grid=None,
+    strategy="optuna",
+    search_space={
+        "C": optuna.distributions.FloatDistribution(1e-4, 10, log=True),
+        "penalty": optuna.distributions.CategoricalDistribution(["l1", "l2"]),
+    },
+    n_trials=30,
+    optuna_warmup_trials=10,
+    random_state=42,
+)
+```
+
+Optuna trials use real `ask`/`tell`; completed, failed, and pruned results are
+replayed from SQLite on resume. `n_trials` caps terminal trials across resume.
+For conditional spaces, pass a `search_space(trial) -> dict` callable plus a
+stable `search_space_id`. Multi-objective and fold-level pruning are not yet
+exposed by `HyperPhoenixCV`.
 
 ### Random Search
 
@@ -151,8 +180,8 @@ Perform a random search over the parameter space:
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    random_search=True,
-    n_iter=50           # Number of random combinations
+    strategy="random",
+    n_trials=50         # Number of random combinations
 )
 ```
 
@@ -258,6 +287,12 @@ Main class for hyperparameter search.
 - `n_jobs`: number of parallel jobs (default=1).
 - `parallelism`: `"trials"` (default) or `"folds"`; exactly one axis uses `n_jobs`.
 - `inner_max_num_threads`: optional native-thread cap for process-parallel trials.
+- `trial_timeout`: optional per-trial timeout in seconds. Requires
+  `parallelism="trials"` and `n_jobs >= 2`; timed-out trials are stored failed.
+- `cancel_callback`: optional zero-argument callable. Return `True` or a reason
+  string to stop before next unstarted trial.
+- `memmap_max_nbytes`, `memmap_temp_folder`, `joblib_batch_size`: joblib
+  process-backend settings; arrays over default `"1M"` use read-only memmap.
 - `pre_dispatch`: controls number of dispatched jobs (default='2*n_jobs').
 - `error_score`: value to assign when an error occurs (default=np.nan).
 - `early_stopping_patience`: number of iterations without improvement to stop early (default=None, disabled).
