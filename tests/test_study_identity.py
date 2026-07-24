@@ -1,14 +1,11 @@
-import joblib
 import pytest
 from sklearn.linear_model import LogisticRegression
 
-from hyperphoenixcv.checkpoint import CheckpointManager
 from hyperphoenixcv.study_identity import (
-    CheckpointMismatchError,
-    CheckpointSchemaError,
     StudyIdentity,
     UnsupportedIdentityValueError,
 )
+from hyperphoenixcv.storage.sqlite_store import SQLiteStudyStore, StudyMismatchError
 
 
 def make_identity(**overrides):
@@ -45,26 +42,24 @@ def test_identity_is_stable_when_grid_dict_order_changes():
     ],
 )
 def test_resume_rejects_changed_identity(tmp_path, change, field):
-    path = tmp_path / "study.pkl"
+    path = tmp_path / "study.sqlite3"
     first = make_identity()
-    CheckpointManager(str(path), verbose=False).save([{"params": {"C": 1.0}}], first)
+    with SQLiteStudyStore(str(path)) as store:
+        store.open_study(first)
 
-    with pytest.raises(CheckpointMismatchError, match=field):
-        CheckpointManager(str(path), verbose=False).load_envelope(make_identity(**change))
+    with SQLiteStudyStore(str(path)) as store:
+        with pytest.raises(StudyMismatchError, match=field):
+            store.open_study(make_identity(**change))
 
 
 def test_resume_policy_and_schema_validation(tmp_path):
-    missing = tmp_path / "missing.pkl"
+    missing = tmp_path / "missing.sqlite3"
     identity = make_identity()
-    manager = CheckpointManager(str(missing), verbose=False)
-
-    with pytest.raises(FileNotFoundError):
-        manager.load_envelope(identity, resume="must")
-    assert manager.load_envelope(identity, resume="never") is None
-
-    joblib.dump({"schema_version": 999}, missing)
-    with pytest.raises(CheckpointSchemaError, match="missing fields"):
-        manager.load_envelope(identity)
+    with SQLiteStudyStore(str(missing)) as store:
+        with pytest.raises(FileNotFoundError):
+            store.open_study(identity, resume="must")
+        created = store.open_study(identity, resume="never")
+        assert store.open_study(identity, resume="must") == created
 
 
 def test_callable_requires_explicit_stable_id():

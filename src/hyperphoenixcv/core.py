@@ -44,7 +44,7 @@ class HyperPhoenixCV(BaseEstimator):
         scoring=['f1', 'accuracy'],
         cv=5,
         n_jobs=-2,
-        checkpoint_path="experiment_checkpoint.pkl",
+        checkpoint_path="experiment_checkpoint.sqlite3",
         results_csv="experiment_results.csv",
         verbose=True
     )
@@ -74,7 +74,7 @@ class HyperPhoenixCV(BaseEstimator):
         scoring: str | list[str] = 'f1',
         cv: int = 5,
         n_jobs: int = 1,
-        checkpoint_path: str = "hyperphoenix_checkpoint.pkl",
+        checkpoint_path: str = "hyperphoenix_checkpoint.sqlite3",
         results_csv: str = "hyperphoenix_results.csv",
         verbose: bool = True,
         clear_checkpoint: bool = False,
@@ -109,7 +109,8 @@ class HyperPhoenixCV(BaseEstimator):
         n_jobs : int
             Number of processes for parallel computation
         checkpoint_path : str
-            Path to checkpoint file
+            SQLite study-store path. A legacy-looking suffix is converted to
+            ``.sqlite3`` for backward-compatible path selection.
         results_csv : str
             Path to CSV file for results
         verbose : bool

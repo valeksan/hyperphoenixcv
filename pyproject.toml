@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hyperphoenixcv"
-version = "0.3.0"
-description = "Hyper-parameter search with resumable checkpoints"
+version = "0.4.0"
+description = "Hyper-parameter search with resumable SQLite studies"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
   {name = "valeksan", email = "vitaljax001@gmail.com"},
 ]
-keywords = ["hyperparameter tuning", "grid search", "checkpointing", "machine learning", "scikit-learn"]
+keywords = ["hyperparameter tuning", "grid search", "SQLite", "machine learning", "scikit-learn"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",

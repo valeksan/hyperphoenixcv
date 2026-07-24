@@ -1,9 +1,9 @@
 # HyperPhoenixCV 🐦‍🔥
 
 ![CI](https://github.com/valeksan/hyperphoenixcv/actions/workflows/ci.yml/badge.svg)
-![Python](https://img.shields.io/badge/python-3.8%20|%203.9%20|%203.10%20|%203.11%20|%203.12-blue)
+![Python](https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![PyPI](https://img.shields.io/pypi/v/hyperphoenixcv?v=0.3.0)
+![PyPI](https://img.shields.io/pypi/v/hyperphoenixcv?v=0.4.0)
 
 > *"Rise from the ashes of interrupted experiments"*
 
@@ -17,7 +17,7 @@ HyperPhoenixCV is a smart hyperparameter tuning library that, like the mythical 
 - **🧠 Bayesian optimization** – Find better parameters faster with intelligent search.
 - **🎯 Multiple search strategies** – Exhaustive grid search, random search, or predictive optimization.
 - **📊 Multi‑metric evaluation** – Score using multiple metrics (F1, accuracy, precision, etc.) simultaneously.
-- **💾 Automatic checkpointing** – Results are saved automatically to pickle files and CSV.
+- **💾 Transactional persistence** – Trials commit incrementally to local SQLite; CSV is an export.
 - **🔌 Scikit‑learn compatible** – Seamlessly integrates with the scikit‑learn ecosystem.
 - **⚡ Performance optimizations** – Parallel execution with `pre_dispatch` and graceful error handling with `error_score`.
 - **⏱️ Early stopping** – Stop search early if no improvement for a given number of iterations (`early_stopping_patience`).
@@ -55,7 +55,7 @@ The "CV" in the name highlights the library's focus on cross‑validation and ma
 | **Resumability** | Starts over after interruption | ✅ Continues from checkpoint |
 | **Optimization** | Exhaustive search only | ✅ Bayesian, random, or exhaustive |
 | **Multi‑metric** | Single metric at a time | ✅ Multiple metrics simultaneously |
-| **Checkpointing** | Manual saving required | ✅ Automatic pickle & CSV export |
+| **Persistence** | Manual saving required | ✅ Transactional SQLite + CSV export |
 | **Progress tracking** | Limited | ✅ Verbose logs & intermediate results |
 | **Early stopping** | Not supported | ✅ Configurable patience |
 | **Error handling** | Raises exception | ✅ Configurable `error_score` (e.g., `np.nan`) |
@@ -87,11 +87,12 @@ hp = HyperPhoenixCV(
     param_grid=param_grid,
     scoring='accuracy',
     cv=5,
-    checkpoint_path='my_experiment.pkl',
+    checkpoint_path='my_experiment.sqlite3',
+    dataset_id='training-data-v1',
     verbose=True
 )
 
-# Run the search (resumes automatically if interrupted)
+# Run the search (resumes automatically from SQLite if interrupted)
 hp.fit(X, y)
 
 print("Best parameters:", hp.best_params_)
@@ -105,11 +106,24 @@ print(top_results)
 
 ### 🔁 Resuming an Interrupted Search
 
-If the process is stopped (e.g., due to time limits), simply run the same script again – it will load the checkpoint and continue where it left off:
+If the process is stopped (e.g., due to time limits), run the same script again with the same study-store path and `dataset_id`:
 
 ```python
-hp.fit(X, y)  # Automatically resumes from 'my_experiment.pkl'
+hp.fit(X, y)  # Automatically resumes from 'my_experiment.sqlite3'
 ```
+
+SQLite is local, single-coordinator storage. It is not a shared-filesystem or multi-node backend. `resume` accepts `"auto"` (default), `"must"`, or `"never"`; a changed study identity is rejected instead of mixing results.
+
+### Migrating a legacy pickle checkpoint
+
+Normal `fit()` and resume never unpickle files. Import old checkpoints once into the SQLite study explicitly:
+
+```python
+report = hp.import_legacy_checkpoint("old_experiment.pkl", trusted=True)
+print(report)  # imported/skipped/failed counts and invalid-record details
+```
+
+**Security warning:** pickle/joblib loading can execute arbitrary code. Set `trusted=True` only for a file whose source and contents you trust. The importer accepts legacy `List[dict]`, preserves source file, and is idempotent.
 
 ## 📚 Advanced Usage
 
@@ -238,7 +252,10 @@ Main class for hyperparameter search.
 - `pre_dispatch`: controls number of dispatched jobs (default='2*n_jobs').
 - `error_score`: value to assign when an error occurs (default=np.nan).
 - `early_stopping_patience`: number of iterations without improvement to stop early (default=None, disabled).
-- `checkpoint_path`: path to pickle file for checkpointing (default=None).
+- `checkpoint_path`: local SQLite store path (default=`"hyperphoenix_checkpoint.sqlite3"`). A legacy suffix derives an adjacent `.sqlite3` path; it is never resumed as pickle.
+- `storage_path`: explicit local SQLite store path; overrides `checkpoint_path` derivation.
+- `dataset_id`: stable dataset identifier. Required for strong resume identity; `None` emits a warning.
+- `resume`: `"auto"` (default), `"must"`, or `"never"`.
 - `results_csv`: path to CSV file for saving results (default=None).
 - `verbose`: verbosity level (default=False).
 
@@ -252,8 +269,11 @@ Main class for hyperparameter search.
 
 **Methods**:
 
-- `fit(X, y, **fit_params)`: run the search (resumes from checkpoint if available).
+- `fit(X, y)`: run the search and resume from matching SQLite study when allowed.
 - `get_top_results(n=10)`: return a DataFrame with top‑N candidates.
+- `load_results_from_checkpoint(n=10)`: read top results from SQLite after interruption.
+- `import_legacy_checkpoint(path, trusted=True)`: one-time trusted legacy pickle migration.
+- `clear_checkpoint_file()`: delete SQLite store explicitly.
 
 For a complete list of parameters and methods, see the source code or use `help(HyperPhoenixCV)`.
 

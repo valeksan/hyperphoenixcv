@@ -11,7 +11,7 @@ from uuid import uuid4
 
 
 SCHEMA_VERSION = 1
-LIBRARY_VERSION = "0.3.0"
+LIBRARY_VERSION = "0.4.0"
 
 
 class UnsupportedIdentityValueError(ValueError):

@@ -59,7 +59,8 @@ hp = HyperPhoenixCV(
     random_search=True,  # Enable random search
     n_iter=50,           # Number of random combinations to test
     random_state=42,     # For reproducibility
-    checkpoint_path="random_search_checkpoint.pkl",
+    checkpoint_path="random_search_checkpoint.sqlite3",
+    dataset_id="20newsgroups-atheism-graphics-train-v1",
     results_csv="random_search_results.csv",
     verbose=True
 )
@@ -98,8 +99,8 @@ print(f"Random search completed in {hp.n_iter} combinations and found good param
 print("="*50)
 
 # Clean up checkpoints after successful run
-hp.clear_checkpoint()
-print("\nCheckpoint successfully deleted.")
+hp.clear_checkpoint_file()
+print("\nSQLite study store successfully deleted.")
 
 # Tip for users
 print("\nTip: For very large parameter spaces, start with random search,")

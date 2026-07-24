@@ -27,10 +27,10 @@ param_grid = {
     'min_samples_split': [2, 5]
 }
 
-# Create HyperPhoenixCV instance with a temporary checkpoint file
-checkpoint_file = "temp_checkpoint.pkl"
-if os.path.exists(checkpoint_file):
-    os.remove(checkpoint_file)
+# Create HyperPhoenixCV instance with a temporary SQLite study store
+storage_file = "temp_checkpoint.sqlite3"
+if os.path.exists(storage_file):
+    os.remove(storage_file)
 
 tuner = HyperPhoenixCV(
     estimator=RandomForestClassifier(random_state=42),
@@ -39,7 +39,8 @@ tuner = HyperPhoenixCV(
     cv=3,
     n_jobs=1,
     verbose=1,
-    checkpoint_path=checkpoint_file,
+    checkpoint_path=storage_file,
+    dataset_id="verify-library-synthetic-v1",
     clear_checkpoint=False,
     refit=True
 )
@@ -61,8 +62,8 @@ assert tuner.best_estimator_ is not None
 print("Verification passed: library works correctly.")
 
 # Clean up
-if os.path.exists(checkpoint_file):
-    os.remove(checkpoint_file)
-    print(f"Cleaned up {checkpoint_file}")
+if os.path.exists(storage_file):
+    os.remove(storage_file)
+    print(f"Cleaned up {storage_file}")
 if os.path.exists("hyperphoenix_results.csv"):
     os.remove("hyperphoenix_results.csv")

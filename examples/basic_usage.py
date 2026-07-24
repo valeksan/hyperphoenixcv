@@ -44,7 +44,8 @@ hp = HyperPhoenixCV(
     scoring='f1',
     cv=5,
     n_jobs=-1,
-    checkpoint_path="text_classification_checkpoint.pkl",
+    checkpoint_path="text_classification_checkpoint.sqlite3",
+    dataset_id="20newsgroups-atheism-christian-train-v1",
     results_csv="text_classification_results.csv",
     verbose=True
 )
@@ -63,5 +64,5 @@ print("\nTop-5 results:")
 print(top_5)
 
 # Clean up checkpoints after successful run
-hp.clear_checkpoint()
-print("\nCheckpoint successfully deleted.")
+hp.clear_checkpoint_file()
+print("\nSQLite study store successfully deleted.")

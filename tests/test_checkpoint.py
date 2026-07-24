@@ -4,7 +4,6 @@ Unit tests for CheckpointManager.
 
 import os
 import tempfile
-import joblib
 import pytest
 
 from src.hyperphoenixcv.checkpoint import CheckpointManager
@@ -33,23 +32,23 @@ class TestCheckpointManager:
         if os.path.exists(temp_file):
             os.unlink(temp_file)
         manager = CheckpointManager(temp_file, verbose=False)
-        results = manager.load()
-        assert results == []
+        with pytest.raises(RuntimeError, match="Implicit pickle loading"):
+            manager.load()
 
     def test_save_and_load(self, temp_file, sample_results):
         manager = CheckpointManager(temp_file, verbose=False)
         manager.save(sample_results)
         assert os.path.exists(temp_file)
-        loaded = manager.load()
-        assert loaded == sample_results
+        with pytest.raises(RuntimeError, match="Implicit pickle loading"):
+            manager.load()
 
     def test_save_overwrite(self, temp_file, sample_results):
         manager = CheckpointManager(temp_file, verbose=False)
         manager.save(sample_results)
         new_results = [{'params': {'b': 3}}]
         manager.save(new_results)
-        loaded = manager.load()
-        assert loaded == new_results
+        with pytest.raises(RuntimeError, match="Implicit pickle loading"):
+            manager.load()
 
     def test_clear_existing(self, temp_file, sample_results):
         manager = CheckpointManager(temp_file, verbose=False)
@@ -72,9 +71,10 @@ class TestCheckpointManager:
         out, _ = capsys.readouterr()
         assert "Checkpoint saved" in out
 
-        manager.load()
+        with pytest.raises(RuntimeError, match="Implicit pickle loading"):
+            manager.load()
         out, _ = capsys.readouterr()
-        assert "Loaded" in out
+        assert out == ""
 
         manager.clear()
         out, _ = capsys.readouterr()

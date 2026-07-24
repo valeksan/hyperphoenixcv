@@ -4,8 +4,6 @@ Unit tests for ResultManager.
 
 import pandas as pd
 import tempfile
-import joblib
-import os
 import pytest
 
 from src.hyperphoenixcv.result_manager import ResultManager
@@ -118,20 +116,12 @@ class TestResultManager:
 
     def test_load_from_checkpoint(self, manager, tmp_path):
         checkpoint_path = tmp_path / "checkpoint.pkl"
-        data = [
-            {'params': {'x': 1}, 'mean_test_f1': 0.7},
-            {'params': {'x': 2}, 'mean_test_f1': 0.8},
-        ]
-        joblib.dump(data, checkpoint_path)
-        loaded = manager.load_from_checkpoint(str(checkpoint_path))
-        assert loaded == data
-        assert len(manager.results) == 2
-        # Ensure results are added
-        top = manager.get_top_results()
-        assert len(top) == 2
+        with pytest.raises(RuntimeError, match="Implicit pickle loading"):
+            manager.load_from_checkpoint(str(checkpoint_path))
+        assert manager.results == []
 
     def test_load_from_checkpoint_no_file(self, manager, tmp_path):
         checkpoint_path = tmp_path / "nonexistent.pkl"
-        loaded = manager.load_from_checkpoint(str(checkpoint_path))
-        assert loaded == []
-        assert len(manager.results) == 0
+        with pytest.raises(RuntimeError, match="Implicit pickle loading"):
+            manager.load_from_checkpoint(str(checkpoint_path))
+        assert manager.results == []

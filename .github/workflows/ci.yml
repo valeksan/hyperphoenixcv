@@ -8,6 +8,9 @@ on:
       - 'pyproject.toml'
       - 'setup.py'
       - 'verify_library.py'
+      - 'README.md'
+      - 'README_RU.md'
+      - 'examples/**/*.py'
       - 'requirements.txt'
       - '.github/workflows/ci.yml'
   pull_request:
@@ -17,6 +20,9 @@ on:
       - 'pyproject.toml'
       - 'setup.py'
       - 'verify_library.py'
+      - 'README.md'
+      - 'README_RU.md'
+      - 'examples/**/*.py'
       - 'requirements.txt'
       - '.github/workflows/ci.yml'
 
@@ -25,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12"]
 
     steps:
     - uses: actions/checkout@v4
@@ -38,7 +44,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        python -m pip install -e '.[test]'
+        python -m pip install -e '.[test]' build
 
     - name: Run tests with pytest
       run: |
@@ -50,3 +56,13 @@ jobs:
     - name: Run verification script
       run: |
         python verify_library.py
+
+    - name: Compile examples
+      run: python -m compileall -q examples
+
+    - name: Build wheel and install it cleanly
+      run: |
+        python -m build
+        python -m venv /tmp/hyperphoenixcv-wheel-env
+        /tmp/hyperphoenixcv-wheel-env/bin/python -m pip install dist/*.whl
+        /tmp/hyperphoenixcv-wheel-env/bin/python -c "import hyperphoenixcv; assert hyperphoenixcv.__version__ == '0.4.0'"

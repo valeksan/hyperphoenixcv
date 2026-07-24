@@ -51,7 +51,8 @@ hp_bayesian = HyperPhoenixCV(
     n_jobs=-1,
     use_bayesian_optimization=True,
     bayesian_optimizer=custom_optimizer,
-    checkpoint_path="bayesian_checkpoint.pkl",
+    checkpoint_path="bayesian_checkpoint.sqlite3",
+    dataset_id="20newsgroups-bayesian-train-v1",
     results_csv="bayesian_results.csv",
     verbose=True
 )
@@ -163,8 +164,8 @@ print("- Combine with checkpoints to resume search after interruptions")
 print("- Customize bayesian_optimizer for your tasks (number of trees, etc.)")
 
 # Clean up checkpoints
-hp_bayesian.clear_checkpoint()
-print("\nBayesian optimization checkpoint successfully deleted.")
+hp_bayesian.clear_checkpoint_file()
+print("\nBayesian optimization SQLite study store successfully deleted.")
 
 # Tip for users
 print("\nTip: Bayesian optimization is especially effective when evaluating a single")
