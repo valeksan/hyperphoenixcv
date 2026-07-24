@@ -309,6 +309,50 @@ def test_optuna_adapter_replays_committed_trial_and_honors_total_budget():
     assert len(resumed.ask(2)) == 1
 
 
+@pytest.mark.skipif(importlib.util.find_spec("optuna") is None, reason="optional Optuna dependency")
+def test_optuna_adapter_replays_vectors_terminal_states_and_reporter():
+    import optuna
+    from src.hyperphoenixcv.search_strategies import OptunaSearchStrategy
+
+    space = {"C": optuna.distributions.CategoricalDistribution([0.1, 1.0, 10.0, 100.0])}
+    directions = {"accuracy": "maximize", "loss": "minimize"}
+    strategy = OptunaSearchStrategy(space, n_trials=3, random_state=7, directions=directions)
+    strategy.restore([])
+    params = strategy.ask(1)[0]
+    completed = {"params": params, "objective_values": {"accuracy": 0.8, "loss": 0.2}}
+    completed.update(strategy.result_metadata(params))
+    strategy.tell([completed])
+
+    pruned_params = {"C": next(value for value in [0.1, 1.0, 10.0, 100.0] if value != params["C"])}
+    resumed = OptunaSearchStrategy(space, n_trials=3, random_state=7, directions=directions)
+    resumed.restore([completed, {"params": pruned_params, "trial_state": "pruned",
+                                 "optuna_distributions": completed["optuna_distributions"]}])
+    assert resumed.study.trials[0].values == [0.8, 0.2]
+    assert resumed.study.trials[1].state == optuna.trial.TrialState.PRUNED
+    assert len(resumed.ask(3)) == 1
+
+    scalar = OptunaSearchStrategy(space, n_trials=1, random_state=3, directions={"accuracy": "maximize"})
+    scalar.restore([])
+    params = scalar.ask(1)[0]
+    report = scalar.intermediate_reporter(params)
+    assert isinstance(report(1, 0.5), bool)
+    with pytest.raises(ValueError, match="monotonically"):
+        report(1, 0.6)
+
+    forced = OptunaSearchStrategy(space, n_trials=1, random_state=4, directions={"accuracy": "maximize"})
+    forced.restore([])
+    forced_params = forced.ask(1)[0]
+    forced_trial = forced._trials_by_key[next(iter(forced._trials_by_key))]
+    forced_trial.should_prune = lambda: True
+    assert forced.intermediate_reporter(forced_params)(1, 0.2) is True
+    pruned = {"params": forced_params, "trial_state": "pruned"}
+    pruned.update(forced.result_metadata(forced_params))
+    forced.tell([pruned])
+    replayed = OptunaSearchStrategy(space, n_trials=1, random_state=4, directions={"accuracy": "maximize"})
+    replayed.restore([pruned])
+    assert replayed.study.trials[0].state == optuna.trial.TrialState.PRUNED
+
+
 def test_optuna_conflicts_with_legacy_search_flags_before_import():
     with pytest.raises(ValueError, match="conflicts"):
         create_search_strategy(

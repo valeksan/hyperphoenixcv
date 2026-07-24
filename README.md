@@ -187,6 +187,8 @@ receives `(estimator, X, y, params, report, groups, fit_params)`. Call
 `report(step, value)` with increasing integer steps; it returns prune request.
 Evaluator stops safely then returns `{"trial_state": "pruned"}`. Replay means
 same seed + committed history, not changed Optuna version or batch size.
+Examples: `examples/optuna_multiobjective_example.py`,
+`examples/optuna_cooperative_pruning_example.py`.
 
 ### Random Search
 
