@@ -1,6 +1,6 @@
-"""Legacy filename; this project currently has no Bayesian optimizer.
+"""Seeded random search with resumable SQLite checkpoint.
 
-Use seeded random search for a finite categorical space. The deprecated
+This project currently has no Bayesian optimizer. The deprecated
 ``use_bayesian_optimization`` flag enables experimental surrogate ranking only;
 it has no acquisition function or Bayesian sequential sampler.
 """
