@@ -10,6 +10,7 @@ and an explicitly experimental surrogate-ranking compatibility mode.
 
 import warnings
 import secrets
+import os
 from pathlib import Path
 from collections.abc import Mapping
 import numpy as np
@@ -17,6 +18,7 @@ import pandas as pd
 from typing import Union
 from sklearn.base import BaseEstimator, clone
 from sklearn.exceptions import NotFittedError
+from joblib import Parallel, delayed, parallel_config
 
 from .search_strategies import create_search_strategy
 from .legacy_pickle import load_legacy_results, validate_legacy_result
@@ -24,6 +26,11 @@ from .result_manager import ResultManager
 from .cv_executor import SklearnCVEvaluator
 from .study_identity import StudyIdentity
 from .storage import SQLiteStudyStore
+
+
+def _evaluate_trial(evaluator, kwargs: dict) -> dict:
+    """Pickle-friendly worker entry point for trial-level parallelism."""
+    return evaluator.evaluate(**kwargs)
 
 
 def _early_stop_from_results(results: list[dict], metric: str) -> tuple[float, int]:
@@ -112,6 +119,8 @@ class HyperPhoenixCV(BaseEstimator):
         scorer_id: str | None = None,
         cv_id: str | None = None,
         storage_path: str | None = None,
+        parallelism: str = "trials",
+        inner_max_num_threads: int | None = None,
     ):
         """
         Initializes HyperPhoenixCV.
@@ -185,6 +194,8 @@ class HyperPhoenixCV(BaseEstimator):
         self.scorer_id = scorer_id
         self.cv_id = cv_id
         self.storage_path = storage_path
+        self.parallelism = parallelism
+        self.inner_max_num_threads = inner_max_num_threads
 
     @property
     def _scoring(self):
@@ -213,7 +224,7 @@ class HyperPhoenixCV(BaseEstimator):
         self.cv_executor = SklearnCVEvaluator(
             cv=self.cv,
             scoring=self.scoring,
-            n_jobs=self.n_jobs,
+            n_jobs=1 if self.parallelism == "trials" else self.n_jobs,
             verbose=self.verbose,
             pre_dispatch=self.pre_dispatch,
             error_score=self.error_score,
@@ -243,6 +254,43 @@ class HyperPhoenixCV(BaseEstimator):
         if callable(self.refit):
             return
         raise ValueError("refit must be bool, scorer name, or callable")
+
+    def _worker_count(self) -> int:
+        if self.n_jobs == 0:
+            raise ValueError("n_jobs must not be 0")
+        if self.n_jobs > 0:
+            return self.n_jobs
+        return max(1, (os.cpu_count() or 1) + 1 + self.n_jobs)
+
+    def _validate_scheduler(self) -> None:
+        if self.parallelism not in {"trials", "folds"}:
+            raise ValueError("parallelism must be 'trials' or 'folds'")
+        self._worker_count()
+        if self.inner_max_num_threads is not None and self.inner_max_num_threads < 1:
+            raise ValueError("inner_max_num_threads must be a positive integer or None")
+
+    def _update_study_state(self, patch: dict) -> None:
+        state = self.study_store.study_state(self.study_id)
+        state.update(patch)
+        self.study_store.update_study_state(self.study_id, state)
+
+    def _evaluate_batch(self, proposals, X, y, groups, fit_params):
+        kwargs = [
+            {
+                "estimator": self.estimator, "X": X, "y": y,
+                "params": params, "groups": groups,
+                **({"fit_params": fit_params} if fit_params else {}),
+            }
+            for params in proposals
+        ]
+        if len(kwargs) == 1:
+            return [_evaluate_trial(self.cv_executor, kwargs[0])]
+        config = {
+            "backend": "loky", "n_jobs": len(kwargs),
+            "inner_max_num_threads": self.inner_max_num_threads,
+        }
+        with parallel_config(**config):
+            return Parallel()(delayed(_evaluate_trial)(self.cv_executor, item) for item in kwargs)
 
     def _format_metric_string(self, result: dict) -> str:
         """
@@ -312,6 +360,7 @@ class HyperPhoenixCV(BaseEstimator):
             "use_bayesian_optimization": self.use_bayesian_optimization,
             "n_iter": self.n_iter,
             "early_stopping_patience": self.early_stopping_patience,
+            "parallelism": self.parallelism,
         }
 
     def _fit_impl(self, X, y, groups=None, fit_params: dict | None = None):
@@ -334,6 +383,7 @@ class HyperPhoenixCV(BaseEstimator):
         """
         self._reset_fit_state()
         self._validate_refit()
+        self._validate_scheduler()
         if self.clear_checkpoint:
             warnings.warn(
                 "clear_checkpoint=True is deprecated and will be removed in 0.6; "
@@ -364,6 +414,14 @@ class HyperPhoenixCV(BaseEstimator):
             self.study_store = SQLiteStudyStore(self._storage_path())
 
         self.study_id = self.study_store.open_study(self._study_identity, resume=self.resume)
+        self._update_study_state({
+            "scheduler": {
+                "parallelism": self.parallelism,
+                "n_jobs": self.n_jobs,
+                "worker_count": self._worker_count(),
+                "inner_max_num_threads": self.inner_max_num_threads,
+            }
+        })
         # ``ParameterSampler`` must replay exactly after a process crash.  A
         # caller seed already has that property; for ``None`` allocate one once
         # and persist it before asking for any proposal.
@@ -425,80 +483,57 @@ class HyperPhoenixCV(BaseEstimator):
         else:
             proposals_available = True
 
-        # Sequential scheduler for now: one proposal per ask. Phase 5 will ask
-        # batches based on worker capacity without changing this protocol.
+        # Exactly one primary axis: trials use bounded process batches with
+        # single-threaded CV; folds evaluate one trial at a time using n_jobs.
+        batch_size = self._worker_count() if self.parallelism == "trials" else 1
+        if early_stopping_enabled:
+            # Preserve strict patience semantics; a speculative batch could
+            # otherwise commit trials after the stop condition is met.
+            batch_size = 1
         i = 0
         while proposals_available:
-            proposals = self.search_strategy.ask(1)
+            proposals = self.search_strategy.ask(batch_size)
             if not proposals:
                 break
-            params = proposals[0]
-            i += 1
-            if self.verbose:
-                print(f"\n[{i}/{total_candidates}] Testing: {params}")
+            results = self._evaluate_batch(proposals, X, y, groups, fit_params)
+            for params, result in zip(proposals, results):
+                i += 1
+                if self.verbose:
+                    print(f"\n[{i}/{total_candidates}] Testing: {params}")
+                if self.study_store.commit_trial(self.study_id, params, result):
+                    self.result_manager.add_result(result)
+                    self.search_strategy.tell([result])
 
-            evaluation_kwargs = {
-                "estimator": self.estimator, "X": X, "y": y,
-                "params": params, "groups": groups,
-            }
-            if fit_params:
-                evaluation_kwargs["fit_params"] = fit_params
-            result = self.cv_executor.evaluate(**evaluation_kwargs)
-            if self.study_store.commit_trial(self.study_id, params, result):
-                self.result_manager.add_result(result)
-                self.search_strategy.tell([result])
+                if self.verbose and 'error' not in result:
+                    current_str = self._format_metric_string(result)
+                    best_str = self._compute_best_metrics()
+                    print(f"Saved. Current: {current_str} | Best: {best_str}")
 
-            if self.verbose and 'error' not in result:
-                current_str = self._format_metric_string(result)
-                best_str = self._compute_best_metrics()
-                print(f"Saved. Current: {current_str} | Best: {best_str}")
-
-            # Early stopping logic
-            if early_stopping_enabled:
-                if 'error' not in result:
-                    current_score = result.get(f'mean_test_{primary_metric}', -float('inf'))
-                    if current_score > best_score + 1e-9:  # improvement
-                        best_score = current_score
-                        no_improvement_count = 0
-                        if self.verbose:
-                            print(f"🎯 Improvement detected (new best: {best_score:.4f})")
+                if early_stopping_enabled:
+                    if 'error' not in result:
+                        current_score = result.get(f'mean_test_{primary_metric}', -float('inf'))
+                        if current_score > best_score + 1e-9:
+                            best_score = current_score
+                            no_improvement_count = 0
+                        else:
+                            no_improvement_count += 1
                     else:
                         no_improvement_count += 1
-                        if self.verbose:
-                            print(f"⏳ No improvement ({no_improvement_count}/{self.early_stopping_patience})")
-                else:
-                    # Error counts as no improvement
-                    no_improvement_count += 1
-
-                if no_improvement_count >= self.early_stopping_patience:
-                    self.study_store.update_study_state(
-                        self.study_id,
-                        {
-                            "early_stopping": {
-                                "metric": primary_metric,
-                                "best_score": best_score,
-                                "no_improvement_count": no_improvement_count,
-                                "processed_trial_count": len(self.result_manager.results),
-                                "stop_reason": "patience_exhausted",
-                            }
-                        },
-                    )
-                    if self.verbose:
-                        print(f"🛑 Early stopping triggered after {i} iterations (no improvement for {self.early_stopping_patience} consecutive trials).")
-                    break
-
-                self.study_store.update_study_state(
-                    self.study_id,
-                    {
+                    stop_reason = None
+                    if no_improvement_count >= self.early_stopping_patience:
+                        stop_reason = "patience_exhausted"
+                        proposals_available = False
+                    self._update_study_state({
                         "early_stopping": {
                             "metric": primary_metric,
                             "best_score": best_score,
                             "no_improvement_count": no_improvement_count,
                             "processed_trial_count": len(self.result_manager.results),
-                            "stop_reason": None,
+                            "stop_reason": stop_reason,
                         }
-                    },
-                )
+                    })
+                    if not proposals_available:
+                        break
 
         # Save results to CSV
         self.result_manager.save_to_csv()
