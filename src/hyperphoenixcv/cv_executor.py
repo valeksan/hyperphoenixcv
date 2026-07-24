@@ -3,12 +3,13 @@ CVExecutor performs cross‑validation for a given parameter set.
 """
 
 import numpy as np
-from sklearn.base import clone
-from sklearn.model_selection import cross_validate, StratifiedKFold, KFold
+from collections.abc import Mapping
+from sklearn.base import clone, is_classifier
+from sklearn.model_selection import check_cv, cross_validate
 from typing import Dict, Any, List, Union
 
 
-class CVExecutor:
+class SklearnCVEvaluator:
     """
     Executes cross‑validation for a single hyperparameter combination.
 
@@ -41,10 +42,36 @@ class CVExecutor:
     ):
         self.cv = cv
         self.scoring = scoring if isinstance(scoring, list) else [scoring]
+        self.metric_names, self._scoring_spec = self._normalize_scoring(scoring)
         self.n_jobs = n_jobs
         self.verbose = verbose
         self.pre_dispatch = pre_dispatch
         self.error_score = error_score
+        self._splits = None
+
+    @staticmethod
+    def _normalize_scoring(scoring):
+        """Normalize supported sklearn scorer forms to named multi-metric spec."""
+        if isinstance(scoring, Mapping):
+            if not scoring:
+                raise ValueError("scoring mapping must not be empty")
+            return list(scoring), dict(scoring)
+        if callable(scoring):
+            return ["score"], {"score": scoring}
+        if isinstance(scoring, str):
+            return [scoring], {scoring: scoring}
+        if isinstance(scoring, list) and all(isinstance(item, str) for item in scoring):
+            if not scoring:
+                raise ValueError("scoring list must not be empty")
+            return list(scoring), {item: item for item in scoring}
+        raise ValueError("scoring must be a string, callable, list of strings, or mapping")
+
+    def _resolve_splits(self, estimator, X, y, groups):
+        """Resolve sklearn splitter once per evaluator/study execution."""
+        if self._splits is None:
+            splitter = check_cv(self.cv, y=y, classifier=is_classifier(estimator))
+            self._splits = list(splitter.split(X, y, groups))
+        return self._splits
 
     def evaluate(
         self,
@@ -73,36 +100,14 @@ class CVExecutor:
         """
         estimator_with_params = clone(estimator).set_params(**params)
 
-        # Determine CV splitter
-        if isinstance(self.cv, int):
-            classification_metrics = {
-                'accuracy', 'balanced_accuracy', 'f1', 'precision', 'recall',
-                'f1_macro', 'f1_micro', 'f1_weighted', 'precision_macro',
-                'precision_micro', 'precision_weighted', 'recall_macro',
-                'recall_micro', 'recall_weighted', 'jaccard', 'roc_auc'
-            }
-            if any(m in classification_metrics for m in self.scoring):
-                cv_splitter = StratifiedKFold(
-                    n_splits=self.cv,
-                    shuffle=True,
-                    random_state=42,
-                )
-            else:
-                cv_splitter = KFold(
-                    n_splits=self.cv,
-                    shuffle=True,
-                    random_state=42,
-                )
-        else:
-            cv_splitter = self.cv
-
         try:
+            cv_splitter = self._resolve_splits(estimator, X, y, groups)
             scores = cross_validate(
                 estimator_with_params,
                 X,
                 y,
                 cv=cv_splitter,
-                scoring=self.scoring,
+                scoring=self._scoring_spec,
                 n_jobs=self.n_jobs,
                 groups=groups,
                 return_train_score=False,
@@ -114,6 +119,8 @@ class CVExecutor:
                 **self._format_scores(scores),
             }
         except Exception as e:
+            if self.error_score == 'raise':
+                raise
             if self.verbose:
                 print(f"⚠️ Error during CV for params {params}: {e}")
             result = {
@@ -127,10 +134,14 @@ class CVExecutor:
         Convert raw cross_validate output to a flat dictionary.
         """
         formatted = {}
-        for metric in self.scoring:
+        for metric in self.metric_names:
             test_metric = f'test_{metric}'
             if test_metric in scores:
                 formatted[f'mean_test_{metric}'] = float(scores[test_metric].mean())
                 formatted[f'std_test_{metric}'] = float(scores[test_metric].std())
                 formatted[f'scores_{metric}'] = scores[test_metric].tolist()
         return formatted
+
+
+# Existing public import path remains valid during P1 migration.
+CVExecutor = SklearnCVEvaluator

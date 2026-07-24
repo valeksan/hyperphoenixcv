@@ -100,3 +100,56 @@ def test_refit_false_does_not_publish_usable_estimator(tmp_path):
     assert not hasattr(search, "best_estimator_")
     with pytest.raises(NotFittedError):
         search.predict(X)
+
+
+def test_multi_metric_refit_by_name(tmp_path):
+    from sklearn.datasets import make_classification
+
+    X, y = make_classification(n_samples=40, n_features=4, random_state=0)
+    search = make_search(
+        checkpoint_path=str(tmp_path / "checkpoint.sqlite3"),
+        results_csv=str(tmp_path / "results.csv"),
+        param_grid={"C": [0.1, 1.0]},
+        scoring={"acc": "accuracy", "f1_score": "f1"},
+        refit="f1_score",
+    )
+    search.fit(X, y)
+
+    assert search.best_score_ == max(search.cv_results_["mean_test_f1_score"])
+    assert hasattr(search, "best_estimator_")
+
+
+def test_multi_metric_refit_true_is_rejected_before_persistence(tmp_path):
+    from sklearn.datasets import make_classification
+
+    X, y = make_classification(n_samples=40, n_features=4, random_state=0)
+    checkpoint = tmp_path / "checkpoint.sqlite3"
+    search = make_search(
+        checkpoint_path=str(checkpoint),
+        results_csv=str(tmp_path / "results.csv"),
+        scoring={"acc": "accuracy", "f1_score": "f1"},
+        refit=True,
+    )
+
+    with pytest.raises(ValueError, match="multi-metric"):
+        search.fit(X, y)
+    assert not checkpoint.exists()
+
+
+def test_multi_metric_refit_callable_selects_cv_result_index(tmp_path):
+    from sklearn.datasets import make_classification
+
+    X, y = make_classification(n_samples=40, n_features=4, random_state=0)
+    search = make_search(
+        checkpoint_path=str(tmp_path / "checkpoint.sqlite3"),
+        results_csv=str(tmp_path / "results.csv"),
+        param_grid={"C": [0.1, 1.0]},
+        scoring={"acc": "accuracy", "f1_score": "f1"},
+        refit=lambda cv_results: 1,
+        scorer_id="refit-callable-test-v1",
+    )
+    search.fit(X, y)
+
+    assert search.best_index_ == 1
+    assert search.best_params_ == search.cv_results_["params"][1]
+    assert hasattr(search, "best_estimator_")

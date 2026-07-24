@@ -11,6 +11,7 @@ and an explicitly experimental surrogate-ranking compatibility mode.
 import warnings
 import secrets
 from pathlib import Path
+from collections.abc import Mapping
 import numpy as np
 import pandas as pd
 from typing import Union
@@ -20,7 +21,7 @@ from sklearn.exceptions import NotFittedError
 from .search_strategies import create_search_strategy
 from .legacy_pickle import load_legacy_results, validate_legacy_result
 from .result_manager import ResultManager
-from .cv_executor import CVExecutor
+from .cv_executor import SklearnCVEvaluator
 from .study_identity import StudyIdentity
 from .storage import SQLiteStudyStore
 
@@ -90,7 +91,7 @@ class HyperPhoenixCV(BaseEstimator):
         self,
         estimator,
         param_grid: dict,
-        scoring: str | list[str] = 'f1',
+        scoring: str | list[str] | Mapping[str, object] | object = 'f1',
         cv: int = 5,
         n_jobs: int = 1,
         checkpoint_path: str = "hyperphoenix_checkpoint.sqlite3",
@@ -188,6 +189,10 @@ class HyperPhoenixCV(BaseEstimator):
     @property
     def _scoring(self):
         """Normalized scoring used internally; public constructor value stays intact."""
+        if isinstance(self.scoring, Mapping):
+            return list(self.scoring)
+        if callable(self.scoring):
+            return ["score"]
         return self.scoring if isinstance(self.scoring, list) else [self.scoring]
 
     def _create_runtime_components(self, *, sampler_random_state: int | None = None):
@@ -205,9 +210,9 @@ class HyperPhoenixCV(BaseEstimator):
             scoring=self._scoring,
             results_csv=self.results_csv,
         )
-        self.cv_executor = CVExecutor(
+        self.cv_executor = SklearnCVEvaluator(
             cv=self.cv,
-            scoring=self._scoring,
+            scoring=self.scoring,
             n_jobs=self.n_jobs,
             verbose=self.verbose,
             pre_dispatch=self.pre_dispatch,
@@ -221,6 +226,23 @@ class HyperPhoenixCV(BaseEstimator):
             "_study_identity", "best_params_", "best_score_", "best_estimator_", "cv_results_", "best_index_",
         ):
             self.__dict__.pop(name, None)
+
+    def _validate_refit(self) -> None:
+        """Validate supported sklearn refit forms before creating a study."""
+        metrics = self._scoring
+        if isinstance(self.refit, bool):
+            if self.refit and len(metrics) > 1:
+                raise ValueError(
+                    "For multi-metric scoring, refit must be a scorer name, callable, or False."
+                )
+            return
+        if isinstance(self.refit, str):
+            if self.refit not in metrics:
+                raise ValueError(f"refit={self.refit!r} is not a scoring metric")
+            return
+        if callable(self.refit):
+            return
+        raise ValueError("refit must be bool, scorer name, or callable")
 
     def _format_metric_string(self, result: dict) -> str:
         """
@@ -311,6 +333,7 @@ class HyperPhoenixCV(BaseEstimator):
             Returns the instance.
         """
         self._reset_fit_state()
+        self._validate_refit()
         if self.clear_checkpoint:
             warnings.warn(
                 "clear_checkpoint=True is deprecated and will be removed in 0.6; "
@@ -506,22 +529,23 @@ class HyperPhoenixCV(BaseEstimator):
         if not valid_results:
             return
 
-        # Sort by the first metric
-        scoring_key = f'mean_test_{self._scoring[0]}'
-        best_result = max(valid_results, key=lambda x: x.get(scoring_key, float('-inf')))
-        self.best_params_ = best_result['params']
-        self.best_score_ = best_result.get(scoring_key, 0.0)
-
-        # Find index in cv_results_['params']
-        if self.cv_results_ and 'params' in self.cv_results_:
-            params_list = self.cv_results_['params']
-            for idx, param_dict in enumerate(params_list):
-                if param_dict == self.best_params_:
-                    self.best_index_ = idx
-                    break
-            else:
-                self.best_index_ = None
+        if callable(self.refit):
+            best_index = self.refit(self.cv_results_)
+            if not isinstance(best_index, int) or not 0 <= best_index < len(valid_results):
+                raise ValueError("refit callable must return a valid cv_results_ index")
+            best_result = valid_results[best_index]
+            self.best_index_ = best_index
+            scoring_key = None
         else:
+            metric = self.refit if isinstance(self.refit, str) else self._scoring[0]
+            scoring_key = f'mean_test_{metric}'
+            best_result = max(valid_results, key=lambda x: x.get(scoring_key, float('-inf')))
+            self.best_index_ = valid_results.index(best_result)
+        self.best_params_ = best_result['params']
+        if scoring_key is not None:
+            self.best_score_ = best_result.get(scoring_key, 0.0)
+
+        if not self.cv_results_ or 'params' not in self.cv_results_:
             self.best_index_ = None
 
     def predict(self, X):

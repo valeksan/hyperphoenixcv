@@ -81,7 +81,7 @@ def test_random_search_and_multiple_metrics_use_distinct_studies(sample_data, sa
     assert len(random.cv_results_["params"]) == 2
 
     multi = make_search(tmp_path / "multi", sample_pipeline, sample_param_grid,
-                        scoring=["accuracy", "f1"])
+                        scoring=["accuracy", "f1"], refit=False)
     multi.fit(X, y)
     assert {"mean_test_accuracy", "mean_test_f1"} <= set(multi.cv_results_)
 
@@ -99,7 +99,7 @@ def test_load_results_from_sqlite(sample_data, sample_pipeline, sample_param_gri
 def test_failed_trial_is_stored_without_publishing_cv_result(sample_data, sample_pipeline, tmp_path):
     X, y = sample_data
     grid = {"tfidf__max_features": [10, 20], "clf__C": ["invalid", 1.0]}
-    search = make_search(tmp_path, sample_pipeline, grid)
+    search = make_search(tmp_path, sample_pipeline, grid, error_score=np.nan)
     search.fit(X, y)
 
     assert len(search.cv_results_["params"]) < len(list(ParameterGrid(grid)))

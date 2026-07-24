@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 from sklearn.linear_model import LogisticRegression
 from sklearn.datasets import make_classification
-from sklearn.model_selection import KFold, StratifiedKFold
+from sklearn.model_selection import KFold, StratifiedKFold, check_cv
+from sklearn.metrics import accuracy_score, make_scorer
 
 from src.hyperphoenixcv.cv_executor import CVExecutor
 
@@ -73,16 +74,29 @@ class TestCVExecutor:
         assert 'scores_f1' in result
         assert len(result['scores_accuracy']) == 3
 
+    def test_evaluate_mapping_scoring(self, data, estimator):
+        X, y = data
+        executor = CVExecutor(
+            cv=3, scoring={"acc": "accuracy", "f1_score": "f1"}, verbose=False
+        )
+        result = executor.evaluate(estimator, X, y, {"C": 0.5})
+
+        assert {"mean_test_acc", "mean_test_f1_score"} <= set(result)
+
+    def test_evaluate_callable_scoring(self, data, estimator):
+        X, y = data
+        executor = CVExecutor(cv=3, scoring=make_scorer(accuracy_score), verbose=False)
+        result = executor.evaluate(estimator, X, y, {"C": 0.5})
+
+        assert "mean_test_score" in result
+
     def test_evaluate_error(self, data, estimator):
         X, y = data
         executor = CVExecutor(verbose=False)
         # Invalid parameter that will cause an error
         params = {'C': -1.0}  # negative C may cause error in some solvers
-        result = executor.evaluate(estimator, X, y, params)
-        assert 'params' in result
-        assert result['params'] == params
-        assert 'error' in result
-        assert isinstance(result['error'], str)
+        with pytest.raises(ValueError):
+            executor.evaluate(estimator, X, y, params)
 
     def test_cv_stratified_for_classification(self, data, estimator):
         X, y = data
@@ -90,6 +104,17 @@ class TestCVExecutor:
         # internal splitter should be StratifiedKFold because scoring is f1
         result = executor.evaluate(estimator, X, y, {'C': 1.0})
         assert 'mean_test_f1' in result
+
+    def test_uses_sklearn_check_cv_splits(self, data, estimator):
+        X, y = data
+        executor = CVExecutor(cv=3, scoring='accuracy', verbose=False)
+        executor.evaluate(estimator, X, y, {'C': 1.0})
+        expected = list(check_cv(3, y=y, classifier=True).split(X, y))
+
+        assert len(executor._splits) == len(expected)
+        for actual, reference in zip(executor._splits, expected):
+            assert np.array_equal(actual[0], reference[0])
+            assert np.array_equal(actual[1], reference[1])
 
     def test_cv_kfold_for_regression_scoring(self, data):
         # Use a regression scorer (not classification)

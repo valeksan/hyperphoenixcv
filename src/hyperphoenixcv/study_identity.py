@@ -83,7 +83,10 @@ def param_key(params: Mapping[str, Any]) -> str:
 
 
 def _scorer_config(scoring: Any, stable_id: str | None) -> Any:
-    values = scoring if isinstance(scoring, list) else [scoring]
+    values = (
+        list(scoring.values()) if isinstance(scoring, Mapping)
+        else scoring if isinstance(scoring, list) else [scoring]
+    )
     if any(callable(value) for value in values):
         if stable_id is None:
             raise UnsupportedIdentityValueError(
