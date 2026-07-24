@@ -5,6 +5,7 @@ Result manager for storing, sorting, and exporting hyperparameter search results
 import pandas as pd
 import joblib
 import os
+import json
 from typing import List, Dict, Any, Optional
 
 
@@ -21,18 +22,31 @@ class ResultManager:
         self.scoring = scoring
         self.results_csv = results_csv
         self.results = []
+        self._param_keys = set()
+
+    @staticmethod
+    def param_key(params: Dict[str, Any]) -> str:
+        """Stable key used to make one study's result projection idempotent."""
+        try:
+            return json.dumps(params, sort_keys=True, separators=(",", ":"), default=repr)
+        except (TypeError, ValueError):
+            return repr(sorted(params.items()))
 
     def add_result(self, result: Dict[str, Any]):
         """
         Add a single result to the internal list.
         """
-        self.results.append(result)
+        key = self.param_key(result.get("params", {}))
+        if key not in self._param_keys:
+            self.results.append(result)
+            self._param_keys.add(key)
 
     def add_results(self, results: List[Dict[str, Any]]):
         """
         Add multiple results at once.
         """
-        self.results.extend(results)
+        for result in results:
+            self.add_result(result)
 
     def load_from_checkpoint(self, checkpoint_path: str) -> List[Dict[str, Any]]:
         """
@@ -44,7 +58,7 @@ class ResultManager:
         if not os.path.exists(checkpoint_path):
             return []
         loaded = joblib.load(checkpoint_path)
-        self.results.extend(loaded)
+        self.add_results(loaded)
         return loaded
 
     def clear_results(self):
@@ -52,6 +66,7 @@ class ResultManager:
         Clear the internal results list.
         """
         self.results.clear()
+        self._param_keys.clear()
 
     def get_top_results(self, n: int = 10) -> pd.DataFrame:
         """

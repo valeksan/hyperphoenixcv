@@ -3,6 +3,7 @@ CVExecutor performs cross‑validation for a given parameter set.
 """
 
 import numpy as np
+from sklearn.base import clone
 from sklearn.model_selection import cross_validate, StratifiedKFold, KFold
 from typing import Dict, Any, List, Union
 
@@ -70,7 +71,7 @@ class CVExecutor:
                 - 'scores_<metric>' (list of per‑fold scores) for each metric
                 - 'error': only present if an exception occurred
         """
-        estimator_with_params = estimator.set_params(**params)
+        estimator_with_params = clone(estimator).set_params(**params)
 
         # Determine CV splitter
         if isinstance(self.cv, int):

@@ -12,7 +12,7 @@ import os
 import numpy as np
 import pandas as pd
 from typing import Union
-from sklearn.base import BaseEstimator
+from sklearn.base import BaseEstimator, clone
 from sklearn.exceptions import NotFittedError
 from sklearn.utils.validation import check_is_fitted
 
@@ -62,7 +62,7 @@ class HyperPhoenixCV(BaseEstimator):
     print(top_10)
 
     # Manually delete checkpoint
-    hp.clear_checkpoint()
+    hp.clear_checkpoint_file()
     """
 
     def __init__(
@@ -108,7 +108,7 @@ class HyperPhoenixCV(BaseEstimator):
         verbose : bool
             Whether to print progress
         clear_checkpoint : bool
-            Whether to delete existing checkpoint on initialization
+            Whether to delete existing checkpoint at the start of fit
         random_search : bool
             Whether to use random search instead of exhaustive grid search
         n_iter : int
@@ -136,12 +136,13 @@ class HyperPhoenixCV(BaseEstimator):
         """
         self.estimator = estimator
         self.param_grid = param_grid
-        self.scoring = scoring if isinstance(scoring, list) else [scoring]
+        self.scoring = scoring
         self.cv = cv
         self.n_jobs = n_jobs
         self.checkpoint_path = checkpoint_path
         self.results_csv = results_csv
         self.verbose = verbose
+        self.clear_checkpoint = clear_checkpoint
         self.random_search = random_search
         self.n_iter = n_iter
         self.random_state = random_state
@@ -152,43 +153,46 @@ class HyperPhoenixCV(BaseEstimator):
         self.error_score = error_score
         self.early_stopping_patience = early_stopping_patience
 
-        # Create components
+    @property
+    def _scoring(self):
+        """Normalized scoring used internally; public constructor value stays intact."""
+        return self.scoring if isinstance(self.scoring, list) else [self.scoring]
+
+    def _create_runtime_components(self):
+        """Create per-fit collaborators. Constructor must stay side-effect free."""
         self.search_strategy = create_search_strategy(
-            param_grid=param_grid,
-            random_search=random_search,
-            use_bayesian_optimization=use_bayesian_optimization,
-            n_iter=n_iter,
-            random_state=random_state,
-            bayesian_optimizer=bayesian_optimizer,
-            scoring=self.scoring[0] if self.scoring else 'f1',
+            param_grid=self.param_grid,
+            random_search=self.random_search,
+            use_bayesian_optimization=self.use_bayesian_optimization,
+            n_iter=self.n_iter,
+            random_state=self.random_state,
+            bayesian_optimizer=self.bayesian_optimizer,
+            scoring=self._scoring[0] if self._scoring else 'f1',
         )
         self.checkpoint_manager = CheckpointManager(
-            checkpoint_path=checkpoint_path,
-            verbose=verbose,
+            checkpoint_path=self.checkpoint_path,
+            verbose=self.verbose,
         )
         self.result_manager = ResultManager(
-            scoring=self.scoring,
-            results_csv=results_csv,
+            scoring=self._scoring,
+            results_csv=self.results_csv,
         )
         self.cv_executor = CVExecutor(
-            cv=cv,
-            scoring=self.scoring,
-            n_jobs=n_jobs,
-            verbose=verbose,
-            pre_dispatch=pre_dispatch,
-            error_score=error_score,
+            cv=self.cv,
+            scoring=self._scoring,
+            n_jobs=self.n_jobs,
+            verbose=self.verbose,
+            pre_dispatch=self.pre_dispatch,
+            error_score=self.error_score,
         )
 
-        # Delete checkpoint if specified
-        if clear_checkpoint:
-            self.checkpoint_manager.clear()
-
-        # Attributes that will be set after fit
-        self.best_params_ = {}
-        self.best_score_ = 0.0
-        self.best_estimator_ = None
-        self.cv_results_ = {}
-        self.best_index_ = None
+    def _reset_fit_state(self):
+        """Discard runtime and fitted state from a previous fit attempt."""
+        for name in (
+            "search_strategy", "checkpoint_manager", "result_manager", "cv_executor",
+            "best_params_", "best_score_", "best_estimator_", "cv_results_", "best_index_",
+        ):
+            self.__dict__.pop(name, None)
 
     def _format_metric_string(self, result: dict) -> str:
         """
@@ -205,7 +209,7 @@ class HyperPhoenixCV(BaseEstimator):
             Formatted string like "f1: 0.85 ± 0.02 | accuracy: 0.90 ± 0.01"
         """
         metrics = []
-        for metric in self.scoring:
+        for metric in self._scoring:
             mean_key = f'mean_test_{metric}'
             std_key = f'std_test_{metric}'
             if mean_key in result:
@@ -228,7 +232,7 @@ class HyperPhoenixCV(BaseEstimator):
             return ""
 
         best_metrics = []
-        for metric in self.scoring:
+        for metric in self._scoring:
             metric_key = f'mean_test_{metric}'
             best_val = max(
                 r[metric_key] for r in valid_results
@@ -255,6 +259,11 @@ class HyperPhoenixCV(BaseEstimator):
         self : object
             Returns the instance.
         """
+        self._reset_fit_state()
+        self._create_runtime_components()
+        if self.clear_checkpoint:
+            self.checkpoint_manager.clear()
+
         # Load progress from checkpoint
         checkpoint_results = self.checkpoint_manager.load()
         self.result_manager.add_results(checkpoint_results)
@@ -277,7 +286,7 @@ class HyperPhoenixCV(BaseEstimator):
                 print("Remaining parameters sorted by predicted metric.")
 
         # Early stopping tracking
-        primary_metric = self.scoring[0]
+        primary_metric = self._scoring[0]
         best_score = -float('inf')
         no_improvement_count = 0
 
@@ -339,13 +348,14 @@ class HyperPhoenixCV(BaseEstimator):
         self._update_best_attributes()
 
         # Refit the best estimator on the whole dataset
-        if self.refit and self.best_params_:
-            self.best_estimator_ = self.estimator.set_params(**self.best_params_)
+        if self.refit and hasattr(self, "best_params_") and self.best_params_:
+            self.best_estimator_ = clone(self.estimator).set_params(**self.best_params_)
             self.best_estimator_.fit(X, y)
 
         if self.verbose:
             print(f"\nAll results saved to {self.results_csv}")
-            print(f"Best result ({self.scoring[0]}): {self.best_score_:.4f}")
+            if hasattr(self, "best_score_"):
+                print(f"Best result ({self._scoring[0]}): {self.best_score_:.4f}")
             if self.random_search:
                 total_grid = len(all_params)
                 print(
@@ -359,13 +369,10 @@ class HyperPhoenixCV(BaseEstimator):
         """Set best_params_, best_score_, and best_index_ from result_manager."""
         valid_results = [r for r in self.result_manager.results if 'error' not in r]
         if not valid_results:
-            self.best_params_ = {}
-            self.best_score_ = 0.0
-            self.best_index_ = None
             return
 
         # Sort by the first metric
-        scoring_key = f'mean_test_{self.scoring[0]}'
+        scoring_key = f'mean_test_{self._scoring[0]}'
         best_result = max(valid_results, key=lambda x: x.get(scoring_key, float('-inf')))
         self.best_params_ = best_result['params']
         self.best_score_ = best_result.get(scoring_key, 0.0)
@@ -396,7 +403,7 @@ class HyperPhoenixCV(BaseEstimator):
         y_pred : array-like of shape (n_samples,)
             Predicted values.
         """
-        check_is_fitted(self, 'best_estimator_')
+        self._check_refitted()
         return self.best_estimator_.predict(X)
 
     def predict_proba(self, X):
@@ -413,7 +420,7 @@ class HyperPhoenixCV(BaseEstimator):
         y_proba : array-like of shape (n_samples, n_classes)
             Class probabilities.
         """
-        check_is_fitted(self, 'best_estimator_')
+        self._check_refitted()
         return self.best_estimator_.predict_proba(X)
 
     def score(self, X, y):
@@ -432,7 +439,7 @@ class HyperPhoenixCV(BaseEstimator):
         score : float
             Metric value (default uses scoring[0]).
         """
-        check_is_fitted(self, 'best_estimator_')
+        self._check_refitted()
         return self.best_estimator_.score(X, y)
 
     def get_top_results(self, n: int = 10) -> pd.DataFrame:
@@ -450,11 +457,20 @@ class HyperPhoenixCV(BaseEstimator):
         """
         return self.result_manager.get_top_results(n)
 
-    def clear_checkpoint(self):
+    def _check_refitted(self):
+        if not hasattr(self, "best_estimator_") or self.best_estimator_ is None:
+            raise NotFittedError(
+                "HyperPhoenixCV is not refitted. Call fit(..., refit=True) first."
+            )
+
+    def clear_checkpoint_file(self):
         """
-        Deletes the checkpoint file.
+        Deletes the checkpoint file explicitly.
+
+        `clear_checkpoint` is a sklearn constructor parameter, so it cannot
+        also be an instance method.
         """
-        self.checkpoint_manager.clear()
+        CheckpointManager(self.checkpoint_path, verbose=self.verbose).clear()
 
     def load_results_from_checkpoint(self, n: int = 10) -> pd.DataFrame:
         """
@@ -472,9 +488,9 @@ class HyperPhoenixCV(BaseEstimator):
             Top‑N results from the checkpoint
         """
         # Load checkpoint directly (bypassing result_manager)
-        checkpoint_results = self.checkpoint_manager.load()
+        checkpoint_results = CheckpointManager(self.checkpoint_path, verbose=self.verbose).load()
         # Create a temporary ResultManager to format results
-        temp_manager = ResultManager(scoring=self.scoring)
+        temp_manager = ResultManager(scoring=self._scoring)
         temp_manager.add_results(checkpoint_results)
         return temp_manager.get_top_results(n)
     def _load_checkpoint(self):
@@ -482,15 +498,12 @@ class HyperPhoenixCV(BaseEstimator):
         Private method for backward compatibility.
         Returns the list of results from the checkpoint.
         """
-        return self.checkpoint_manager.load()
+        return CheckpointManager(self.checkpoint_path, verbose=self.verbose).load()
 
     def _save_checkpoint(self, results):
         """
         Private method for backward compatibility.
         Saves results to checkpoint.
         """
-        self.checkpoint_manager.save(results)
-
-
-
+        CheckpointManager(self.checkpoint_path, verbose=self.verbose).save(results)
 

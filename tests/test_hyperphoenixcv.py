@@ -49,7 +49,7 @@ def test_hyperphoenixcv_initialization(sample_pipeline, sample_param_grid):
     )
     assert hp.estimator == sample_pipeline
     assert hp.param_grid == sample_param_grid
-    assert hp.scoring == ['accuracy']
+    assert hp.scoring == 'accuracy'
     assert hp.cv == 2
     assert hp.n_jobs == 1
     assert hp.pre_dispatch == 'n_jobs'
