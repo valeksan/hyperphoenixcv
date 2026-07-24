@@ -10,6 +10,7 @@ from hyperphoenixcv import HyperPhoenixCV
 from hyperphoenixcv.cv_executor import CVExecutor
 from hyperphoenixcv.result_manager import ResultManager
 from hyperphoenixcv.storage.sqlite_store import SQLiteStudyStore
+from hyperphoenixcv.search_strategies import SearchStrategy
 
 
 class SimulatedCrash(BaseException):
@@ -115,6 +116,43 @@ def test_committed_trial_survives_crash_before_next_proposal(tmp_path, monkeypat
     assert evaluated == [{"C": 1.0}, {"C": 10.0}]
     assert len(trial_results(resumed)) == 3
     assert resumed.best_params_ == {"C": 10.0}
+
+
+def test_random_sampler_replays_after_commit_before_tell(tmp_path, monkeypatch):
+    X, y = make_classification(n_samples=30, n_features=4, random_state=7)
+    kwargs = dict(
+        estimator=LogisticRegression(max_iter=100),
+        param_grid={"C": [0.1, 1.0, 10.0, 100.0]},
+        scoring="accuracy", cv=2, random_search=True, n_iter=3,
+        random_state=None, dataset_id="random-post-commit-v1",
+        checkpoint_path=str(tmp_path / "random.sqlite3"),
+        results_csv=str(tmp_path / "random.csv"), verbose=False, refit=False,
+    )
+    monkeypatch.setattr(CVExecutor, "evaluate", deterministic_evaluate)
+    original_tell = SearchStrategy.tell
+    calls = 0
+
+    def tell_then_crash(self, results):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise SimulatedCrash()
+        return original_tell(self, results)
+
+    monkeypatch.setattr(SearchStrategy, "tell", tell_then_crash)
+    with pytest.raises(SimulatedCrash):
+        HyperPhoenixCV(**kwargs).fit(X, y)
+
+    monkeypatch.undo()
+    resumed = HyperPhoenixCV(**kwargs)
+    resumed.fit(X, y)
+    results = trial_results(resumed)
+
+    assert len(results) == 3
+    assert len({str(result["params"]) for result in results}) == 3
+    with SQLiteStudyStore(resumed._storage_path()) as store:
+        state = store.study_state(resumed.study_id)
+    assert isinstance(state["sampler_random_state"], int)
 
 
 def test_random_early_stopping_recovers_counter_after_post_commit_crash(tmp_path, monkeypatch):

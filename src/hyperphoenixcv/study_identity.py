@@ -118,7 +118,7 @@ class StudyIdentity:
         cls,
         *,
         estimator: Any,
-        param_grid: Mapping[str, Any],
+        param_grid: Any,
         scoring: Any,
         cv: Any,
         random_state: int | None,

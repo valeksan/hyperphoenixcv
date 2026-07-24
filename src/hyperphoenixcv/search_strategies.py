@@ -3,24 +3,51 @@ Search strategies for hyperparameter optimization.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
-from typing import List, Dict, Any, Optional
+from collections.abc import Iterator, Mapping
+from typing import List, Dict, Any, Optional, Protocol
 import warnings
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import ParameterGrid
+from sklearn.model_selection import ParameterGrid, ParameterSampler
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import LabelEncoder
 
 from .study_identity import param_key
 
 
-class SearchStrategy(ABC):
+class SearchSpace(Protocol):
+    """Finite or streaming parameter source."""
+
+    def iter_parameters(self) -> Iterator[Dict[str, Any]]: ...
+    def total_candidates(self) -> int: ...
+
+
+class Sampler(Protocol):
+    """Resume-safe proposal protocol used by search coordinator."""
+
+    def restore(self, results: List[Dict[str, Any]]) -> None: ...
+    def ask(self, n: int) -> List[Dict[str, Any]]: ...
+    def tell(self, results: List[Dict[str, Any]]) -> None: ...
+
+
+class Evaluator(Protocol):
+    """One parameter assignment -> terminal trial result."""
+
+    def evaluate(self, estimator, X, y, params: Dict[str, Any], groups=None) -> Dict[str, Any]: ...
+
+
+class Scheduler(Protocol):
+    """Coordinator capacity contract. Scheduler implementation lands in P1.4."""
+
+    def free_workers(self) -> int: ...
+
+
+class SearchStrategy(ABC, SearchSpace, Sampler):
     """
     Abstract base class for hyperparameter search strategies.
     """
 
-    def __init__(self, param_grid: Dict[str, Any]):
+    def __init__(self, param_grid: Mapping[str, Any] | List[Dict[str, Any]]):
         self.param_grid = param_grid
         self._proposal_iterator: Iterator[Dict[str, Any]] | None = None
         self._known_param_keys: set[str] = set()
@@ -110,7 +137,7 @@ class RandomSearchStrategy(SearchStrategy):
 
     def __init__(
         self,
-        param_grid: Dict[str, Any],
+        param_grid: Mapping[str, Any] | List[Dict[str, Any]],
         n_iter: int = 10,
         random_state: Optional[int] = None,
     ):
@@ -123,26 +150,33 @@ class RandomSearchStrategy(SearchStrategy):
         return list(self.iter_parameters())
 
     def iter_parameters(self) -> Iterator[Dict[str, Any]]:
-        grid = ParameterGrid(self.param_grid)
-        total = len(grid)
-        requested = min(max(self.n_iter, 0), total)
-        if requested == total:
-            yield from grid
-            return
+        """Match sklearn ``ParameterSampler`` order without candidate materialization.
 
-        # ``ParameterGrid.__getitem__`` computes one mixed-radix combination.
-        # Sampling indices therefore keeps memory O(n_iter), not O(grid size).
-        rng = np.random.default_rng(self.random_state)
-        for index in rng.choice(total, size=requested, replace=False):
-            yield grid[int(index)]
+        A persisted effective seed makes replay deterministic after a crash.  For
+        distribution-valued spaces sklearn samples with replacement; ``n_iter``
+        is therefore both proposal and resume budget.
+        """
+        return iter(ParameterSampler(
+            self.param_grid,
+            n_iter=max(self.n_iter, 0),
+            random_state=self.random_state,
+        ))
 
     def total_candidates(self) -> int:
+        has_distribution = any(
+            hasattr(values, "rvs")
+            for branch in (self.param_grid if isinstance(self.param_grid, list) else [self.param_grid])
+            for values in branch.values()
+        )
+        if has_distribution:
+            return max(self.n_iter, 0)
         return min(max(self.n_iter, 0), len(ParameterGrid(self.param_grid)))
 
 
-class BayesianSearchStrategy(SearchStrategy):
+class ExperimentalSurrogateRankingStrategy(SearchStrategy):
     """
-    Bayesian optimization strategy using a surrogate model.
+    Experimental surrogate-ranking strategy. This is not Bayesian optimization:
+    it has no acquisition function or sequential Bayesian sampler.
     """
 
     def __init__(
@@ -248,8 +282,12 @@ class BayesianSearchStrategy(SearchStrategy):
         return X.values
 
 
+# Compatibility alias. New code must use the explicit experimental name.
+BayesianSearchStrategy = ExperimentalSurrogateRankingStrategy
+
+
 def create_search_strategy(
-    param_grid: Dict[str, Any],
+    param_grid: Mapping[str, Any] | List[Dict[str, Any]],
     random_search: bool = False,
     use_bayesian_optimization: bool = False,
     n_iter: int = 10,
@@ -268,7 +306,7 @@ def create_search_strategy(
             FutureWarning,
             stacklevel=2,
         )
-        return BayesianSearchStrategy(
+        return ExperimentalSurrogateRankingStrategy(
             param_grid=param_grid,
             scoring=scoring,
             model=bayesian_optimizer,

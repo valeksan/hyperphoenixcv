@@ -5,10 +5,11 @@ HyperPhoenixCV - Resumable hyperparameter search with checkpoint support.
 
 This module provides the HyperPhoenixCV class, which extends the functionality
 of scikit-learn's GridSearchCV by adding checkpoint support, random search,
-and Bayesian optimization to accelerate the search for optimal hyperparameters.
+and an explicitly experimental surrogate-ranking compatibility mode.
 """
 
 import warnings
+import secrets
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -44,8 +45,8 @@ def _early_stop_from_results(results: list[dict], metric: str) -> tuple[float, i
 
 class HyperPhoenixCV(BaseEstimator):
     """
-    Resumable hyperparameter search with checkpoint support and Bayesian optimization.
-    Supports exhaustive grid search, random search, and Bayesian optimization.
+    Resumable hyperparameter search with checkpoint support.
+    Supports exhaustive grid search, random search, and experimental surrogate ranking.
 
     Example usage:
     # Create an instance
@@ -142,10 +143,10 @@ class HyperPhoenixCV(BaseEstimator):
         random_state : int, optional
             Random seed for reproducibility
         use_bayesian_optimization : bool
-            Whether to use Bayesian optimization (predictive parameter selection)
+            Deprecated compatibility flag for experimental surrogate ranking;
+            this is not Bayesian optimization.
         bayesian_optimizer : sklearn regressor, optional
-            Model that predicts which parameters will perform better
-            (defaults to RandomForestRegressor)
+            Deprecated model argument for experimental surrogate ranking.
         refit : bool, default=True
             Whether to refit the best model on the entire dataset after search.
             If True, after hyperparameter search completes, `best_estimator_.fit(X, y)` will be called.
@@ -158,7 +159,7 @@ class HyperPhoenixCV(BaseEstimator):
         early_stopping_patience : int, optional
             If set, stop the search after this many iterations without improvement
             in the primary metric (scoring[0]). Useful for random search and
-            Bayesian optimization to avoid unnecessary evaluations.
+            experimental surrogate ranking to avoid unnecessary evaluations.
         """
         self.estimator = estimator
         self.param_grid = param_grid
@@ -189,14 +190,14 @@ class HyperPhoenixCV(BaseEstimator):
         """Normalized scoring used internally; public constructor value stays intact."""
         return self.scoring if isinstance(self.scoring, list) else [self.scoring]
 
-    def _create_runtime_components(self):
+    def _create_runtime_components(self, *, sampler_random_state: int | None = None):
         """Create per-fit collaborators. Constructor must stay side-effect free."""
         self.search_strategy = create_search_strategy(
             param_grid=self.param_grid,
             random_search=self.random_search,
             use_bayesian_optimization=self.use_bayesian_optimization,
             n_iter=self.n_iter,
-            random_state=self.random_state,
+            random_state=sampler_random_state if sampler_random_state is not None else self.random_state,
             bayesian_optimizer=self.bayesian_optimizer,
             scoring=self._scoring[0] if self._scoring else 'f1',
         )
@@ -334,13 +335,24 @@ class HyperPhoenixCV(BaseEstimator):
             cv_id=self.cv_id,
             strategy_config=self._strategy_identity_config(),
         )
-        self._create_runtime_components()
         self.study_store = SQLiteStudyStore(self._storage_path())
         if self.clear_checkpoint:
             self.study_store.clear()
             self.study_store = SQLiteStudyStore(self._storage_path())
 
         self.study_id = self.study_store.open_study(self._study_identity, resume=self.resume)
+        # ``ParameterSampler`` must replay exactly after a process crash.  A
+        # caller seed already has that property; for ``None`` allocate one once
+        # and persist it before asking for any proposal.
+        sampler_random_state = self.random_state
+        if self.random_search and sampler_random_state is None:
+            state = self.study_store.study_state(self.study_id)
+            sampler_random_state = state.get("sampler_random_state")
+            if sampler_random_state is None:
+                sampler_random_state = secrets.randbits(32)
+                state["sampler_random_state"] = sampler_random_state
+                self.study_store.update_study_state(self.study_id, state)
+        self._create_runtime_components(sampler_random_state=sampler_random_state)
         checkpoint_results = self.study_store.results(self.study_id)
         self.result_manager.add_results(checkpoint_results)
 

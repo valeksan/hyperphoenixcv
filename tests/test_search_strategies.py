@@ -6,6 +6,7 @@ import pytest
 import numpy as np
 import random
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import ParameterSampler
 
 from src.hyperphoenixcv.search_strategies import (
     SearchStrategy,
@@ -63,6 +64,15 @@ class TestExhaustiveSearchStrategy:
         strategy.tell([{"params": {"a": 2}, "mean_test_score": 0.5}])
         assert strategy.ask(2) == [{"a": 3}]
 
+    def test_failed_and_negative_history_stay_reserved(self):
+        strategy = ExhaustiveSearchStrategy({"a": [1, 2, 3]})
+        strategy.restore([
+            {"params": {"a": 1}, "error": "fit failed"},
+            {"params": {"a": 2}, "mean_test_score": -3.0},
+        ])
+
+        assert strategy.ask(3) == [{"a": 3}]
+
 
 class TestRandomSearchStrategy:
     """Test RandomSearchStrategy."""
@@ -119,6 +129,30 @@ class TestRandomSearchStrategy:
     def test_total_candidates_respects_n_iter(self):
         strategy = RandomSearchStrategy({"a": [1, 2]}, n_iter=10)
         assert strategy.total_candidates() == 2
+
+    def test_conditional_list_of_dicts_matches_sklearn_order(self):
+        space = [
+            {"kind": ["a"], "value": [1, 2]},
+            {"kind": ["b"], "depth": [3, 4]},
+        ]
+        expected = list(ParameterSampler(space, n_iter=3, random_state=19))
+
+        assert list(RandomSearchStrategy(space, n_iter=3, random_state=19).iter_parameters()) == expected
+
+    def test_distribution_space_replays_and_honors_n_iter(self):
+        class IntegerDistribution:
+            def rvs(self, random_state=None):
+                return int(random_state.randint(1, 100))
+
+        strategy = RandomSearchStrategy(
+            {"value": IntegerDistribution()}, n_iter=4, random_state=19
+        )
+        first = list(strategy.iter_parameters())
+        second = list(strategy.iter_parameters())
+
+        assert len(first) == 4
+        assert first == second
+        assert strategy.total_candidates() == 4
 
 
 class TestBayesianSearchStrategy:

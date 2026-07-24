@@ -14,8 +14,8 @@ HyperPhoenixCV is a smart hyperparameter tuning library that, like the mythical 
 ## ✨ Features
 
 - **🔄 Resumable searches** – Continue from the last checkpoint after any interruption.
-- **🧠 Bayesian optimization** – Find better parameters faster with intelligent search.
-- **🎯 Multiple search strategies** – Exhaustive grid search, random search, or predictive optimization.
+- **🎲 Search modes** – Exhaustive grid or reproducible random sampling.
+- **🎯 Multiple search strategies** – Exhaustive grid search or random search.
 - **📊 Multi‑metric evaluation** – Score using multiple metrics (F1, accuracy, precision, etc.) simultaneously.
 - **💾 Transactional persistence** – Trials commit incrementally to local SQLite; CSV is an export.
 - **🔌 Scikit‑learn compatible** – Seamlessly integrates with the scikit‑learn ecosystem.
@@ -53,7 +53,7 @@ The "CV" in the name highlights the library's focus on cross‑validation and ma
 | Feature | `GridSearchCV` | `HyperPhoenixCV` |
 |---------|----------------|------------------|
 | **Resumability** | Starts over after interruption | ✅ Continues from checkpoint |
-| **Optimization** | Exhaustive search only | ✅ Bayesian, random, or exhaustive |
+| **Optimization** | Exhaustive search only | ✅ Random or exhaustive |
 | **Multi‑metric** | Single metric at a time | ✅ Multiple metrics simultaneously |
 | **Persistence** | Manual saving required | ✅ Transactional SQLite + CSV export |
 | **Progress tracking** | Limited | ✅ Verbose logs & intermediate results |
@@ -127,16 +127,18 @@ print(report)  # imported/skipped/failed counts and invalid-record details
 
 ## 📚 Advanced Usage
 
-### Bayesian Optimization
+### Deprecated surrogate ranking
 
-Enable Bayesian optimization to reduce the number of evaluations:
+`use_bayesian_optimization=True` remains temporary compatibility API only. It
+does **not** implement Bayesian optimization; do not use it for adaptive search.
+Use seeded random search until optional Optuna backend is available:
 
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    use_bayesian_optimization=True,
-    n_iter=30,          # Number of Bayesian iterations
+    random_search=True,
+    n_iter=30,
     verbose=True
 )
 ```
