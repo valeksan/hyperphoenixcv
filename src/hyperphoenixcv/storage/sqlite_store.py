@@ -13,7 +13,7 @@ from uuid import uuid4
 from ..study_identity import StudyIdentity, canonicalize, mismatch_fields, param_key
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class StudyStoreError(ValueError):
@@ -97,6 +97,7 @@ class SQLiteStudyStore:
                         scorer_digest TEXT NOT NULL,
                         seed INTEGER,
                         config_digest TEXT NOT NULL,
+                        state_json TEXT NOT NULL DEFAULT '{{}}',
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL
                     );
@@ -122,7 +123,7 @@ class SQLiteStudyStore:
                     PRAGMA user_version = {SCHEMA_VERSION};
                 """
             )
-        elif version == 1:
+        if version == 1:
             # Version 1 stored canonical JSON in ``param_key``. Convert it to
             # a compact SHA-256 key before new resume logic reads the rows.
             with self._transaction() as conn:
@@ -133,6 +134,13 @@ class SQLiteStudyStore:
                         "UPDATE trials SET param_key = ? WHERE trial_id = ?",
                         (param_key(params), row["trial_id"]),
                     )
+                conn.execute("PRAGMA user_version = 2")
+            version = 2
+        if version == 2:
+            with self._transaction() as conn:
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(studies)")}
+                if "state_json" not in columns:
+                    conn.execute("ALTER TABLE studies ADD COLUMN state_json TEXT NOT NULL DEFAULT '{}'")
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @staticmethod
@@ -186,6 +194,26 @@ class SQLiteStudyStore:
                 "SELECT param_key FROM trials WHERE study_id = ?", (study_id,)
             )
         }
+
+    def study_state(self, study_id: str) -> dict[str, Any]:
+        """Return durable orchestration state for a study."""
+        row = self.connection.execute(
+            "SELECT state_json FROM studies WHERE study_id = ?", (study_id,)
+        ).fetchone()
+        if row is None:
+            raise StudyStoreError(f"Unknown study: {study_id}")
+        return _restore(json.loads(row["state_json"]))
+
+    def update_study_state(self, study_id: str, state: dict[str, Any]) -> None:
+        """Atomically replace small orchestration state after a committed trial."""
+        now = _now()
+        with self._transaction() as conn:
+            updated = conn.execute(
+                "UPDATE studies SET state_json = ?, updated_at = ? WHERE study_id = ?",
+                (_json(state), now, study_id),
+            )
+            if updated.rowcount != 1:
+                raise StudyStoreError(f"Unknown study: {study_id}")
 
     def results(self, study_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute(

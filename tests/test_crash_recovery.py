@@ -117,6 +117,58 @@ def test_committed_trial_survives_crash_before_next_proposal(tmp_path, monkeypat
     assert resumed.best_params_ == {"C": 10.0}
 
 
+def test_random_early_stopping_recovers_counter_after_post_commit_crash(tmp_path, monkeypatch):
+    X, y = make_classification(n_samples=30, n_features=4, random_state=7)
+    search = HyperPhoenixCV(
+        estimator=LogisticRegression(max_iter=100),
+        param_grid={"C": [0.1, 1.0, 10.0, 100.0]},
+        scoring="accuracy",
+        cv=2,
+        random_search=True,
+        n_iter=4,
+        random_state=7,
+        early_stopping_patience=2,
+        dataset_id="early-stop-v1",
+        checkpoint_path=str(tmp_path / "checkpoint.sqlite3"),
+        results_csv=str(tmp_path / "results.csv"),
+        verbose=False,
+        refit=False,
+    )
+    monkeypatch.setattr(
+        CVExecutor,
+        "evaluate",
+        lambda self, estimator, X, y, params, groups=None: {
+            "params": params,
+            "mean_test_accuracy": 1.0,
+            "std_test_accuracy": 0.0,
+        },
+    )
+    original_commit = SQLiteStudyStore.commit_trial
+    commits = 0
+
+    def commit_then_crash(self, *args, **kwargs):
+        nonlocal commits
+        committed = original_commit(self, *args, **kwargs)
+        commits += 1
+        if commits == 2:
+            raise SimulatedCrash()
+        return committed
+
+    monkeypatch.setattr(SQLiteStudyStore, "commit_trial", commit_then_crash)
+    with pytest.raises(SimulatedCrash):
+        search.fit(X, y)
+
+    monkeypatch.undo()
+    resumed = HyperPhoenixCV(**search.get_params(deep=False))
+    resumed.fit(X, y)
+
+    assert len(trial_results(resumed)) == 3
+    with SQLiteStudyStore(resumed._storage_path()) as store:
+        state = store.study_state(resumed.study_id)["early_stopping"]
+    assert state["no_improvement_count"] == 2
+    assert state["stop_reason"] == "patience_exhausted"
+
+
 def test_csv_export_failure_preserves_trials_and_resume_does_not_re_evaluate(tmp_path, monkeypatch):
     X, y = make_classification(n_samples=30, n_features=4, random_state=7)
     search = make_search(tmp_path)

@@ -125,6 +125,7 @@ class StudyIdentity:
         dataset_id: str | None,
         scorer_id: str | None,
         cv_id: str | None,
+        strategy_config: Mapping[str, Any] | None = None,
     ) -> "StudyIdentity":
         values = {
             "dataset_id": dataset_id,
@@ -134,7 +135,8 @@ class StudyIdentity:
             "scorer_digest": digest(_scorer_config(scoring, scorer_id)),
             "seed": random_state,
         }
-        return cls(config_digest=digest(values), **values)
+        config = {**values, "strategy": canonicalize(strategy_config or {})}
+        return cls(config_digest=digest(config), **values)
 
     def as_dict(self) -> dict[str, Any]:
         return {

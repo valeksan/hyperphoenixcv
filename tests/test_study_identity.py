@@ -41,6 +41,13 @@ def test_param_key_is_sha256_and_stable_when_dictionary_order_changes():
     assert all(char in "0123456789abcdef" for char in first)
 
 
+def test_identity_changes_when_strategy_or_budget_changes():
+    grid = make_identity(strategy_config={"random_search": False, "n_iter": 10})
+    random = make_identity(strategy_config={"random_search": True, "n_iter": 2})
+
+    assert grid.config_digest != random.config_digest
+
+
 @pytest.mark.parametrize(
     ("change", "field"),
     [

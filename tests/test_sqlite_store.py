@@ -58,7 +58,7 @@ def test_migrates_zero_version_database(tmp_path):
         study_id = store.open_study(identity())
         assert store.commit_trial(study_id, {"C": 0.1}, result())
     connection = sqlite3.connect(path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
     connection.close()
 
 
@@ -80,6 +80,14 @@ def test_migrates_v1_canonical_parameter_key_without_losing_idempotency(tmp_path
     with SQLiteStudyStore(str(path)) as store:
         assert store.completed_param_keys(study_id) == {param_key({"C": 0.1})}
         assert not store.commit_trial(study_id, {"C": 0.1}, result(0.1))
+
+
+def test_study_state_is_durable(tmp_path):
+    with SQLiteStudyStore(str(tmp_path / "study.sqlite3")) as store:
+        study_id = store.open_study(identity())
+        state = {"early_stopping": {"no_improvement_count": 2}}
+        store.update_study_state(study_id, state)
+        assert store.study_state(study_id) == state
 
 
 def test_store_rejects_mismatched_auto_resume(tmp_path):

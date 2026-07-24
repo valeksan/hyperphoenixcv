@@ -24,6 +24,24 @@ from .study_identity import StudyIdentity
 from .storage import SQLiteStudyStore
 
 
+def _early_stop_from_results(results: list[dict], metric: str) -> tuple[float, int]:
+    """Rebuild early-stop counters from terminal trial order."""
+    best_score = -float("inf")
+    no_improvement_count = 0
+    score_key = f"mean_test_{metric}"
+    for result in results:
+        if "error" in result:
+            no_improvement_count += 1
+            continue
+        score = result.get(score_key, -float("inf"))
+        if score > best_score + 1e-9:
+            best_score = score
+            no_improvement_count = 0
+        else:
+            no_improvement_count += 1
+    return best_score, no_improvement_count
+
+
 class HyperPhoenixCV(BaseEstimator):
     """
     Resumable hyperparameter search with checkpoint support and Bayesian optimization.
@@ -264,6 +282,15 @@ class HyperPhoenixCV(BaseEstimator):
             return self.storage_path
         return str(Path(self.checkpoint_path).with_suffix(".sqlite3"))
 
+    def _strategy_identity_config(self) -> dict[str, object]:
+        """Choices that alter proposal order or stopping semantics."""
+        return {
+            "random_search": self.random_search,
+            "use_bayesian_optimization": self.use_bayesian_optimization,
+            "n_iter": self.n_iter,
+            "early_stopping_patience": self.early_stopping_patience,
+        }
+
     def _fit_impl(self, X, y, groups=None):
         """
         Performs hyperparameter tuning with intermediate result saving.
@@ -298,6 +325,7 @@ class HyperPhoenixCV(BaseEstimator):
             dataset_id=self.dataset_id,
             scorer_id=self.scorer_id,
             cv_id=self.cv_id,
+            strategy_config=self._strategy_identity_config(),
         )
         self._create_runtime_components()
         self.study_store = SQLiteStudyStore(self._storage_path())
@@ -330,18 +358,36 @@ class HyperPhoenixCV(BaseEstimator):
             if self.verbose:
                 print("Remaining parameters sorted by predicted metric.")
 
-        # Early stopping tracking
-        primary_metric = self._scoring[0]
-        best_score = -float('inf')
-        no_improvement_count = 0
-
-        # Determine current best score from checkpoint results
-        valid_checkpoint = [r for r in checkpoint_results if 'error' not in r]
-        if valid_checkpoint:
-            best_score = max(
-                r.get(f'mean_test_{primary_metric}', -float('inf'))
-                for r in valid_checkpoint
+        # Early stopping needs a meaningful proposal order. Exhaustive grid has
+        # none, so legacy patience is ignored there rather than silently making
+        # grid results order-dependent.
+        early_stopping_enabled = self.early_stopping_patience is not None and (
+            self.random_search or self.use_bayesian_optimization
+        )
+        if self.early_stopping_patience is not None and not early_stopping_enabled:
+            warnings.warn(
+                "early_stopping_patience applies only to random or adaptive search; ignoring it for grid search.",
+                UserWarning,
+                stacklevel=2,
             )
+
+        # Early stopping tracking. Rebuild from committed trials if state write
+        # was interrupted after a trial commit.
+        primary_metric = self._scoring[0]
+        best_score, no_improvement_count = _early_stop_from_results(
+            checkpoint_results, primary_metric
+        )
+        if early_stopping_enabled:
+            saved_state = self.study_store.study_state(self.study_id).get("early_stopping", {})
+            if (
+                saved_state.get("metric") == primary_metric
+                and saved_state.get("processed_trial_count") == len(checkpoint_results)
+            ):
+                best_score = saved_state["best_score"]
+                no_improvement_count = saved_state["no_improvement_count"]
+
+        if early_stopping_enabled and no_improvement_count >= self.early_stopping_patience:
+            remaining_params = ()
 
         # Iterate over remaining parameters
         for i, params in enumerate(remaining_params, start=1):
@@ -364,7 +410,7 @@ class HyperPhoenixCV(BaseEstimator):
                 print(f"Saved. Current: {current_str} | Best: {best_str}")
 
             # Early stopping logic
-            if self.early_stopping_patience is not None:
+            if early_stopping_enabled:
                 if 'error' not in result:
                     current_score = result.get(f'mean_test_{primary_metric}', -float('inf'))
                     if current_score > best_score + 1e-9:  # improvement
@@ -381,9 +427,34 @@ class HyperPhoenixCV(BaseEstimator):
                     no_improvement_count += 1
 
                 if no_improvement_count >= self.early_stopping_patience:
+                    self.study_store.update_study_state(
+                        self.study_id,
+                        {
+                            "early_stopping": {
+                                "metric": primary_metric,
+                                "best_score": best_score,
+                                "no_improvement_count": no_improvement_count,
+                                "processed_trial_count": len(self.result_manager.results),
+                                "stop_reason": "patience_exhausted",
+                            }
+                        },
+                    )
                     if self.verbose:
                         print(f"🛑 Early stopping triggered after {i} iterations (no improvement for {self.early_stopping_patience} consecutive trials).")
                     break
+
+                self.study_store.update_study_state(
+                    self.study_id,
+                    {
+                        "early_stopping": {
+                            "metric": primary_metric,
+                            "best_score": best_score,
+                            "no_improvement_count": no_improvement_count,
+                            "processed_trial_count": len(self.result_manager.results),
+                            "stop_reason": None,
+                        }
+                    },
+                )
 
         # Save results to CSV
         self.result_manager.save_to_csv()
@@ -581,6 +652,7 @@ class HyperPhoenixCV(BaseEstimator):
             estimator=self.estimator, param_grid=self.param_grid, scoring=self.scoring,
             cv=self.cv, random_state=self.random_state, dataset_id=self.dataset_id,
             scorer_id=self.scorer_id, cv_id=self.cv_id,
+            strategy_config=self._strategy_identity_config(),
         )
     def _load_checkpoint(self):
         """
