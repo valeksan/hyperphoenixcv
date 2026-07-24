@@ -55,6 +55,14 @@ class TestExhaustiveSearchStrategy:
         assert strategy.total_candidates() == 10_000_000
         assert next(params) == {"a": 0}
 
+    def test_ask_tell_skips_committed_history_without_materializing_grid(self):
+        strategy = ExhaustiveSearchStrategy({"a": [1, 2, 3]})
+        strategy.restore([{"params": {"a": 1}}])
+
+        assert strategy.ask(1) == [{"a": 2}]
+        strategy.tell([{"params": {"a": 2}, "mean_test_score": 0.5}])
+        assert strategy.ask(2) == [{"a": 3}]
+
 
 class TestRandomSearchStrategy:
     """Test RandomSearchStrategy."""
@@ -207,22 +215,24 @@ class TestCreateSearchStrategy:
     def test_bayesian(self):
         param_grid = {'a': [1, 2]}
         model = RandomForestRegressor()
-        strategy = create_search_strategy(
-            param_grid,
-            use_bayesian_optimization=True,
-            scoring='accuracy',
-            bayesian_optimizer=model,
-        )
+        with pytest.warns(FutureWarning, match="not Bayesian optimization"):
+            strategy = create_search_strategy(
+                param_grid,
+                use_bayesian_optimization=True,
+                scoring='accuracy',
+                bayesian_optimizer=model,
+            )
         assert isinstance(strategy, BayesianSearchStrategy)
         assert strategy.scoring == 'accuracy'
         assert strategy.model is model
 
     def test_bayesian_default_model(self):
         param_grid = {'a': [1, 2]}
-        strategy = create_search_strategy(
-            param_grid,
-            use_bayesian_optimization=True,
-        )
+        with pytest.warns(FutureWarning):
+            strategy = create_search_strategy(
+                param_grid,
+                use_bayesian_optimization=True,
+            )
         assert isinstance(strategy, BayesianSearchStrategy)
         assert strategy.scoring == 'f1'
         assert isinstance(strategy.model, RandomForestRegressor)

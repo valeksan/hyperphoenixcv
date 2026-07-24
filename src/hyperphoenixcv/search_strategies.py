@@ -5,11 +5,14 @@ Search strategies for hyperparameter optimization.
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from typing import List, Dict, Any, Optional
+import warnings
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import ParameterGrid
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import LabelEncoder
+
+from .study_identity import param_key
 
 
 class SearchStrategy(ABC):
@@ -19,6 +22,8 @@ class SearchStrategy(ABC):
 
     def __init__(self, param_grid: Dict[str, Any]):
         self.param_grid = param_grid
+        self._proposal_iterator: Iterator[Dict[str, Any]] | None = None
+        self._known_param_keys: set[str] = set()
 
     @abstractmethod
     def generate_parameters(self) -> List[Dict[str, Any]]:
@@ -43,6 +48,43 @@ class SearchStrategy(ABC):
         Default implementation returns all generated parameters (no sorting).
         """
         return self.generate_parameters()
+
+    def restore(self, results: List[Dict[str, Any]]) -> None:
+        """Start a resumable ask/tell session from committed trial history."""
+        self._known_param_keys = {
+            param_key(result["params"])
+            for result in results
+            if "params" in result
+        }
+        self._proposal_iterator = self.iter_parameters()
+
+    def ask(self, n: int) -> List[Dict[str, Any]]:
+        """Return up to ``n`` unseen proposals without materializing the space."""
+        if n < 1:
+            return []
+        if self._proposal_iterator is None:
+            self.restore([])
+
+        proposals = []
+        while len(proposals) < n:
+            try:
+                params = next(self._proposal_iterator)
+            except StopIteration:
+                break
+            key = param_key(params)
+            if key in self._known_param_keys:
+                continue
+            # Reserve now. This prevents duplicate proposals in one batch; tell
+            # keeps terminal results reserved across later batches.
+            self._known_param_keys.add(key)
+            proposals.append(params)
+        return proposals
+
+    def tell(self, results: List[Dict[str, Any]]) -> None:
+        """Accept terminal results. Future adaptive samplers override this hook."""
+        for result in results:
+            if "params" in result:
+                self._known_param_keys.add(param_key(result["params"]))
 
 
 class ExhaustiveSearchStrategy(SearchStrategy):
@@ -220,6 +262,12 @@ def create_search_strategy(
     Maintains backward compatibility with HyperPhoenixCV parameters.
     """
     if use_bayesian_optimization:
+        warnings.warn(
+            "use_bayesian_optimization is deprecated: current surrogate mode is not "
+            "Bayesian optimization. Use random_search until the Optuna backend lands.",
+            FutureWarning,
+            stacklevel=2,
+        )
         return BayesianSearchStrategy(
             param_grid=param_grid,
             scoring=scoring,

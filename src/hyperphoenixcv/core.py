@@ -343,20 +343,12 @@ class HyperPhoenixCV(BaseEstimator):
         if self.verbose:
             print(f"Total combinations: {total_candidates}")
 
-        # Exclude already processed without a materialized ``remaining_params``.
+        # Resume sampler from committed terminal trials, then drive every mode
+        # through one incremental ask -> evaluate -> commit -> tell loop.
         completed_keys = self.study_store.completed_param_keys(self.study_id)
-        remaining_params = (
-            p for p in self.search_strategy.iter_parameters()
-            if self.result_manager.param_key(p) not in completed_keys
-        )
+        self.search_strategy.restore(checkpoint_results)
         if self.verbose:
             print(f"Completed trials: {len(completed_keys)}")
-
-        # If Bayesian optimization is used, sort remaining parameters by prediction
-        if self.use_bayesian_optimization:
-            remaining_params = self.search_strategy.suggest_next(checkpoint_results)
-            if self.verbose:
-                print("Remaining parameters sorted by predicted metric.")
 
         # Early stopping needs a meaningful proposal order. Exhaustive grid has
         # none, so legacy patience is ignored there rather than silently making
@@ -387,10 +379,19 @@ class HyperPhoenixCV(BaseEstimator):
                 no_improvement_count = saved_state["no_improvement_count"]
 
         if early_stopping_enabled and no_improvement_count >= self.early_stopping_patience:
-            remaining_params = ()
+            proposals_available = False
+        else:
+            proposals_available = True
 
-        # Iterate over remaining parameters
-        for i, params in enumerate(remaining_params, start=1):
+        # Sequential scheduler for now: one proposal per ask. Phase 5 will ask
+        # batches based on worker capacity without changing this protocol.
+        i = 0
+        while proposals_available:
+            proposals = self.search_strategy.ask(1)
+            if not proposals:
+                break
+            params = proposals[0]
+            i += 1
             if self.verbose:
                 print(f"\n[{i}/{total_candidates}] Testing: {params}")
 
@@ -403,6 +404,7 @@ class HyperPhoenixCV(BaseEstimator):
             )
             if self.study_store.commit_trial(self.study_id, params, result):
                 self.result_manager.add_result(result)
+                self.search_strategy.tell([result])
 
             if self.verbose and 'error' not in result:
                 current_str = self._format_metric_string(result)
