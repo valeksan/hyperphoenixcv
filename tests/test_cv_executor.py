@@ -177,8 +177,17 @@ class TestCVExecutor:
         # Use a parameter that will cause an error (negative C)
         params = {'C': -1.0}
         result = executor.evaluate(estimator, X, y, params)
-        # With error_score=np.nan, cross_validate may return NaN scores
-        # Our executor may still catch an error and add 'error' key.
-        # We'll just ensure the function doesn't raise an exception.
         assert 'params' in result
-        # Either 'error' is present or scores are NaN, both are acceptable
+        assert 'error' in result
+        assert np.isnan(result['mean_test_accuracy'])
+        assert len(result['fold_errors']) == 2
+
+    def test_result_includes_fold_timings(self, data, estimator):
+        X, y = data
+        result = CVExecutor(cv=3, scoring='accuracy', verbose=False).evaluate(
+            estimator, X, y, {'C': 1.0}
+        )
+
+        assert len(result['fit_time']) == 3
+        assert len(result['score_time']) == 3
+        assert result['mean_fit_time'] >= 0

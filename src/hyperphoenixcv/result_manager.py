@@ -3,6 +3,7 @@ Result manager for storing, sorting, and exporting hyperparameter search results
 """
 
 import pandas as pd
+import numpy as np
 import json
 from typing import List, Dict, Any, Optional
 
@@ -115,14 +116,46 @@ class ResultManager:
         Returns:
             Dictionary with keys 'params', 'mean_test_*', 'std_test_*', etc.
         """
-        valid = [r for r in self.results if 'error' not in r]
-        if not valid:
+        if not self.results:
             return {}
 
-        cv_results = {'params': [r['params'] for r in valid]}
+        results = self.results
+        cv_results = {'params': [r['params'] for r in results]}
+        param_names = sorted({name for result in results for name in result['params']})
+        for name in param_names:
+            values = [result['params'].get(name) for result in results]
+            mask = [name not in result['params'] for result in results]
+            cv_results[f'param_{name}'] = np.ma.array(values, mask=mask, dtype=object)
+
+        for key in ('fit_time', 'score_time'):
+            cv_results[f'mean_{key}'] = [result.get(f'mean_{key}', np.nan) for result in results]
+            cv_results[f'std_{key}'] = [result.get(f'std_{key}', np.nan) for result in results]
         for metric in self.scoring:
             mean_key = f'mean_test_{metric}'
             std_key = f'std_test_{metric}'
-            cv_results[mean_key] = [r[mean_key] for r in valid]
-            cv_results[std_key] = [r[std_key] for r in valid]
+            means = [result.get(mean_key, np.nan) for result in results]
+            cv_results[mean_key] = means
+            cv_results[std_key] = [result.get(std_key, np.nan) for result in results]
+            fold_count = max((len(result.get(f'scores_{metric}', [])) for result in results), default=0)
+            for fold in range(fold_count):
+                cv_results[f'split{fold}_test_{metric}'] = [
+                    result.get(f'scores_{metric}', [np.nan] * fold_count)[fold]
+                    if fold < len(result.get(f'scores_{metric}', [])) else np.nan
+                    for result in results
+                ]
+            cv_results[f'rank_test_{metric}'] = self._rank_descending(means)
         return cv_results
+
+    @staticmethod
+    def _rank_descending(values: list[float]) -> list[int]:
+        """Sklearn-like ordinal ranks; NaN receives worst rank."""
+        finite = [(index, value) for index, value in enumerate(values) if not pd.isna(value)]
+        ranks = [len(values) + 1] * len(values)
+        last_value = None
+        rank = 0
+        for position, (index, value) in enumerate(sorted(finite, key=lambda item: item[1], reverse=True), 1):
+            if last_value is None or value != last_value:
+                rank = position
+                last_value = value
+            ranks[index] = rank
+        return ranks

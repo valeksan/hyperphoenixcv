@@ -291,10 +291,10 @@ class HyperPhoenixCV(BaseEstimator):
             best_metrics.append(f"{metric}: {best_val:.4f}")
         return " | ".join(best_metrics)
 
-    def fit(self, X, y, groups=None):
+    def fit(self, X, y, groups=None, **fit_params):
         """Run search with SQLite as transactional source of truth."""
         try:
-            return self._fit_impl(X, y, groups)
+            return self._fit_impl(X, y, groups, fit_params)
         finally:
             store = self.__dict__.get("study_store")
             if store is not None:
@@ -314,7 +314,7 @@ class HyperPhoenixCV(BaseEstimator):
             "early_stopping_patience": self.early_stopping_patience,
         }
 
-    def _fit_impl(self, X, y, groups=None):
+    def _fit_impl(self, X, y, groups=None, fit_params: dict | None = None):
         """
         Performs hyperparameter tuning with intermediate result saving.
 
@@ -437,13 +437,13 @@ class HyperPhoenixCV(BaseEstimator):
             if self.verbose:
                 print(f"\n[{i}/{total_candidates}] Testing: {params}")
 
-            result = self.cv_executor.evaluate(
-                estimator=self.estimator,
-                X=X,
-                y=y,
-                params=params,
-                groups=groups,
-            )
+            evaluation_kwargs = {
+                "estimator": self.estimator, "X": X, "y": y,
+                "params": params, "groups": groups,
+            }
+            if fit_params:
+                evaluation_kwargs["fit_params"] = fit_params
+            result = self.cv_executor.evaluate(**evaluation_kwargs)
             if self.study_store.commit_trial(self.study_id, params, result):
                 self.result_manager.add_result(result)
                 self.search_strategy.tell([result])
@@ -510,7 +510,7 @@ class HyperPhoenixCV(BaseEstimator):
         # Refit the best estimator on the whole dataset
         if self.refit and hasattr(self, "best_params_") and self.best_params_:
             self.best_estimator_ = clone(self.estimator).set_params(**self.best_params_)
-            self.best_estimator_.fit(X, y)
+            self.best_estimator_.fit(X, y, **(fit_params or {}))
 
         if self.verbose:
             print(f"\nAll results saved to {self.results_csv}")

@@ -80,6 +80,7 @@ class SklearnCVEvaluator:
         y,
         params: Dict[str, Any],
         groups=None,
+        fit_params: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """
         Evaluate a parameter set via cross‑validation.
@@ -110,6 +111,7 @@ class SklearnCVEvaluator:
                 scoring=self._scoring_spec,
                 n_jobs=self.n_jobs,
                 groups=groups,
+                params=fit_params,
                 return_train_score=False,
                 pre_dispatch=self.pre_dispatch,
                 error_score=self.error_score,
@@ -123,10 +125,17 @@ class SklearnCVEvaluator:
                 raise
             if self.verbose:
                 print(f"⚠️ Error during CV for params {params}: {e}")
+            failed_scores = [float(self.error_score)] * len(self._resolve_splits(estimator, X, y, groups))
             result = {
                 'params': params,
                 'error': str(e),
+                'error_type': type(e).__name__,
+                'fold_errors': [str(e)] * len(failed_scores),
             }
+            for metric in self.metric_names:
+                result[f'mean_test_{metric}'] = float(np.mean(failed_scores))
+                result[f'std_test_{metric}'] = float(np.std(failed_scores))
+                result[f'scores_{metric}'] = failed_scores
         return result
 
     def _format_scores(self, scores: Dict[str, np.ndarray]) -> Dict[str, Any]:
@@ -134,6 +143,13 @@ class SklearnCVEvaluator:
         Convert raw cross_validate output to a flat dictionary.
         """
         formatted = {}
+        for timing in ('fit_time', 'score_time'):
+            if timing not in scores:
+                continue
+            values = scores[timing]
+            formatted[f'mean_{timing}'] = float(values.mean())
+            formatted[f'std_{timing}'] = float(values.std())
+            formatted[timing] = values.tolist()
         for metric in self.metric_names:
             test_metric = f'test_{metric}'
             if test_metric in scores:

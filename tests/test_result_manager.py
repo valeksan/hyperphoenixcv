@@ -103,12 +103,14 @@ class TestResultManager:
         manager.add_results(sample_results)
         cv_results = manager.format_cv_results()
         assert 'params' in cv_results
-        assert len(cv_results['params']) == 2
+        assert len(cv_results['params']) == 3
         assert 'mean_test_f1' in cv_results
         assert 'std_test_f1' in cv_results
         assert 'mean_test_accuracy' in cv_results
         assert 'std_test_accuracy' in cv_results
-        assert cv_results['mean_test_f1'] == [0.8, 0.9]
+        assert cv_results['mean_test_f1'][:2] == [0.8, 0.9]
+        assert pd.isna(cv_results['mean_test_f1'][2])
+        assert 'rank_test_f1' in cv_results
 
     def test_format_cv_results_empty(self, manager):
         cv_results = manager.format_cv_results()

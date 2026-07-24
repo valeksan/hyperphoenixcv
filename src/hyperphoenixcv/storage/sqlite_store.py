@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
 import sqlite3
 from typing import Any, Iterator
@@ -28,14 +29,36 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _json_value(value: Any) -> Any:
+    """Canonical JSON value, including non-finite *result* scores."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return {"__float__": "nan" if math.isnan(value) else "inf" if value > 0 else "-inf"}
+    if hasattr(value, "item") and callable(value.item):
+        try:
+            return _json_value(value.item())
+        except (TypeError, ValueError):
+            pass
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in sorted(value.items(), key=lambda item: str(item[0]))}
+    if isinstance(value, list):
+        return [_json_value(item) for item in value]
+    if isinstance(value, tuple):
+        return {"__tuple__": [_json_value(item) for item in value]}
+    if isinstance(value, set):
+        return {"__set__": sorted((_json_value(item) for item in value), key=lambda item: json.dumps(item, sort_keys=True))}
+    return canonicalize(value)
+
+
 def _json(value: Any) -> str:
-    return json.dumps(canonicalize(value), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return json.dumps(_json_value(value), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
 def _restore(value: Any) -> Any:
     if isinstance(value, list):
         return [_restore(item) for item in value]
     if isinstance(value, dict):
+        if set(value) == {"__float__"}:
+            return {"nan": float("nan"), "inf": float("inf"), "-inf": -float("inf")}[value["__float__"]]
         if set(value) == {"__tuple__"}:
             return tuple(_restore(item) for item in value["__tuple__"])
         if set(value) == {"__set__"}:

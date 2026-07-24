@@ -102,7 +102,9 @@ def test_failed_trial_is_stored_without_publishing_cv_result(sample_data, sample
     search = make_search(tmp_path, sample_pipeline, grid, error_score=np.nan)
     search.fit(X, y)
 
-    assert len(search.cv_results_["params"]) < len(list(ParameterGrid(grid)))
+    assert len(search.cv_results_["params"]) == len(list(ParameterGrid(grid)))
+    assert "split0_test_accuracy" in search.cv_results_
+    assert "rank_test_accuracy" in search.cv_results_
     assert any("error" in result for result in search._load_checkpoint())
 
 
@@ -112,3 +114,17 @@ def test_final_refit_predicts(sample_data, sample_pipeline, sample_param_grid, t
     search.fit(X, y)
 
     assert len(search.predict(X)) == len(y)
+
+
+def test_fit_routes_sample_weight_to_cv_and_refit(tmp_path):
+    X, y = make_classification(n_samples=40, n_features=4, random_state=42)
+    search = HyperPhoenixCV(
+        estimator=LogisticRegression(max_iter=1000),
+        param_grid={"C": [1.0]}, scoring="accuracy", cv=2,
+        checkpoint_path=str(tmp_path / "study.sqlite3"),
+        results_csv=str(tmp_path / "results.csv"), dataset_id="fit-params-v1",
+        verbose=False,
+    )
+    search.fit(X, y, sample_weight=np.linspace(1.0, 2.0, len(y)))
+
+    assert hasattr(search, "best_estimator_")
