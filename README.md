@@ -131,17 +131,64 @@ print(report)  # imported/skipped/failed counts and invalid-record details
 
 `use_bayesian_optimization=True` remains temporary compatibility API only. It
 does **not** implement Bayesian optimization; do not use it for adaptive search.
-Use seeded random search until optional Optuna backend is available:
+Use seeded random search, or genuine Optuna ask/tell:
 
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    random_search=True,
-    n_iter=30,
+    strategy="random",
+    n_trials=30,
     verbose=True
 )
 ```
+
+Install optional backend first:
+
+```bash
+pip install "hyperphoenixcv[optuna]"
+```
+
+```python
+import optuna
+
+hp = HyperPhoenixCV(
+    estimator=model,
+    param_grid=None,
+    strategy="optuna",
+    search_space={
+        "C": optuna.distributions.FloatDistribution(1e-4, 10, log=True),
+        "penalty": optuna.distributions.CategoricalDistribution(["l1", "l2"]),
+    },
+    n_trials=30,
+    optuna_warmup_trials=10,
+    random_state=42,
+)
+```
+
+Optuna trials use real `ask`/`tell`; terminal results replay from SQLite on
+resume. `n_trials` caps terminal trials across resume. Conditional spaces need
+`search_space(trial) -> dict` plus stable `search_space_id`.
+
+Multi-objective mode requires explicit directions and exposes `pareto_front_`.
+Use `refit=False`, metric name, or selector callable; `refit=True` is invalid.
+
+```python
+hp = HyperPhoenixCV(
+    estimator=model, param_grid=None, strategy="optuna", search_space=space,
+    n_trials=40, scoring=["accuracy", "neg_log_loss"],
+    optuna_directions={"accuracy": "maximize", "neg_log_loss": "maximize"},
+    refit=False,
+)
+```
+
+Plain sklearn CV never prunes mid-fit. Cooperative `intermediate_evaluator`
+receives `(estimator, X, y, params, report, groups, fit_params)`. Call
+`report(step, value)` with increasing integer steps; it returns prune request.
+Evaluator stops safely then returns `{"trial_state": "pruned"}`. Replay means
+same seed + committed history, not changed Optuna version or batch size.
+Examples: `examples/optuna_multiobjective_example.py`,
+`examples/optuna_cooperative_pruning_example.py`.
 
 ### Random Search
 
@@ -151,8 +198,8 @@ Perform a random search over the parameter space:
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    random_search=True,
-    n_iter=50           # Number of random combinations
+    strategy="random",
+    n_trials=50         # Number of random combinations
 )
 ```
 
@@ -164,7 +211,8 @@ Evaluate using several metrics at once:
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    scoring=['f1', 'accuracy', 'precision']
+    scoring={'f1': 'f1', 'accuracy': 'accuracy', 'precision': 'precision'},
+    refit='f1',
 )
 ```
 
@@ -188,12 +236,16 @@ Control parallel execution and error behavior:
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    n_jobs=4,                # Use 4 CPU cores
-    pre_dispatch='2*n_jobs', # Limit number of simultaneously dispatched jobs
-    error_score=np.nan,      # Assign NaN to failed evaluations instead of raising
+    n_jobs=4,
+    parallelism='trials',    # Default: up to four trials, one CV worker each
+    inner_max_num_threads=1, # Native threads per trial process
+    error_score=np.nan,
     verbose=True
 )
 ```
+
+`parallelism='folds'` instead evaluates one trial at a time and uses `n_jobs`
+for folds. Nested trial-and-fold parallelism is intentionally unsupported.
 
 ### Early Stopping
 
@@ -251,6 +303,14 @@ Main class for hyperparameter search.
 - `scoring`: metric(s) to evaluate (string, callable, list, or dict).
 - `cv`: int, cross‑validation splitter, or iterable (default=5).
 - `n_jobs`: number of parallel jobs (default=1).
+- `parallelism`: `"trials"` (default) or `"folds"`; exactly one axis uses `n_jobs`.
+- `inner_max_num_threads`: optional native-thread cap for process-parallel trials.
+- `trial_timeout`: optional per-trial timeout in seconds. Requires
+  `parallelism="trials"` and `n_jobs >= 2`; timed-out trials are stored failed.
+- `cancel_callback`: optional zero-argument callable. Return `True` or a reason
+  string to stop before next unstarted trial.
+- `memmap_max_nbytes`, `memmap_temp_folder`, `joblib_batch_size`: joblib
+  process-backend settings; arrays over default `"1M"` use read-only memmap.
 - `pre_dispatch`: controls number of dispatched jobs (default='2*n_jobs').
 - `error_score`: value to assign when an error occurs (default=np.nan).
 - `early_stopping_patience`: number of iterations without improvement to stop early (default=None, disabled).

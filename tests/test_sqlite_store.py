@@ -58,7 +58,7 @@ def test_migrates_zero_version_database(tmp_path):
         study_id = store.open_study(identity())
         assert store.commit_trial(study_id, {"C": 0.1}, result())
     connection = sqlite3.connect(path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
     connection.close()
 
 
@@ -88,6 +88,17 @@ def test_study_state_is_durable(tmp_path):
         state = {"early_stopping": {"no_improvement_count": 2}}
         store.update_study_state(study_id, state)
         assert store.study_state(study_id) == state
+
+
+def test_store_accepts_optuna_pruned_terminal_trial(tmp_path):
+    with SQLiteStudyStore(str(tmp_path / "study.sqlite3")) as store:
+        study_id = store.open_study(identity())
+        pruned = {"params": {"C": 0.1}, "trial_state": "pruned"}
+        assert store.commit_trial(study_id, {"C": 0.1}, pruned)
+        state = store.connection.execute(
+            "SELECT state FROM trials WHERE study_id = ?", (study_id,)
+        ).fetchone()[0]
+        assert state == "pruned"
 
 
 def test_store_rejects_mismatched_auto_resume(tmp_path):

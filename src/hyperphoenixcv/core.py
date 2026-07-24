@@ -5,11 +5,12 @@ HyperPhoenixCV - Resumable hyperparameter search with checkpoint support.
 
 This module provides the HyperPhoenixCV class, which extends the functionality
 of scikit-learn's GridSearchCV by adding checkpoint support, random search,
-and an explicitly experimental surrogate-ranking compatibility mode.
+an optional Optuna backend, and experimental surrogate-ranking compatibility.
 """
 
 import warnings
 import secrets
+import os
 from pathlib import Path
 from collections.abc import Mapping
 import numpy as np
@@ -17,6 +18,7 @@ import pandas as pd
 from typing import Union
 from sklearn.base import BaseEstimator, clone
 from sklearn.exceptions import NotFittedError
+from joblib import Parallel, delayed, parallel_config
 
 from .search_strategies import create_search_strategy
 from .legacy_pickle import load_legacy_results, validate_legacy_result
@@ -24,6 +26,11 @@ from .result_manager import ResultManager
 from .cv_executor import SklearnCVEvaluator
 from .study_identity import StudyIdentity
 from .storage import SQLiteStudyStore
+
+
+def _evaluate_trial(evaluator, kwargs: dict) -> dict:
+    """Pickle-friendly worker entry point for trial-level parallelism."""
+    return evaluator.evaluate(**kwargs)
 
 
 def _early_stop_from_results(results: list[dict], metric: str) -> tuple[float, int]:
@@ -47,7 +54,7 @@ def _early_stop_from_results(results: list[dict], metric: str) -> tuple[float, i
 class HyperPhoenixCV(BaseEstimator):
     """
     Resumable hyperparameter search with checkpoint support.
-    Supports exhaustive grid search, random search, and experimental surrogate ranking.
+    Supports grid/random search, optional Optuna search, and experimental surrogate ranking.
 
     Example usage:
     # Create an instance
@@ -90,7 +97,7 @@ class HyperPhoenixCV(BaseEstimator):
     def __init__(
         self,
         estimator,
-        param_grid: dict,
+        param_grid: dict | list[dict] | None = None,
         scoring: str | list[str] | Mapping[str, object] | object = 'f1',
         cv: int = 5,
         n_jobs: int = 1,
@@ -112,6 +119,20 @@ class HyperPhoenixCV(BaseEstimator):
         scorer_id: str | None = None,
         cv_id: str | None = None,
         storage_path: str | None = None,
+        parallelism: str = "trials",
+        inner_max_num_threads: int | None = None,
+        strategy: str | None = None,
+        search_space=None,
+        search_space_id: str | None = None,
+        n_trials: int | None = None,
+        optuna_warmup_trials: int = 10,
+        optuna_directions: Mapping[str, str] | None = None,
+        intermediate_evaluator=None,
+        trial_timeout: float | None = None,
+        cancel_callback=None,
+        memmap_max_nbytes: int | str | None = "1M",
+        memmap_temp_folder: str | None = None,
+        joblib_batch_size: int | str = "auto",
     ):
         """
         Initializes HyperPhoenixCV.
@@ -185,6 +206,20 @@ class HyperPhoenixCV(BaseEstimator):
         self.scorer_id = scorer_id
         self.cv_id = cv_id
         self.storage_path = storage_path
+        self.parallelism = parallelism
+        self.inner_max_num_threads = inner_max_num_threads
+        self.strategy = strategy
+        self.search_space = search_space
+        self.search_space_id = search_space_id
+        self.n_trials = n_trials
+        self.optuna_warmup_trials = optuna_warmup_trials
+        self.optuna_directions = optuna_directions
+        self.intermediate_evaluator = intermediate_evaluator
+        self.trial_timeout = trial_timeout
+        self.cancel_callback = cancel_callback
+        self.memmap_max_nbytes = memmap_max_nbytes
+        self.memmap_temp_folder = memmap_temp_folder
+        self.joblib_batch_size = joblib_batch_size
 
     @property
     def _scoring(self):
@@ -205,6 +240,11 @@ class HyperPhoenixCV(BaseEstimator):
             random_state=sampler_random_state if sampler_random_state is not None else self.random_state,
             bayesian_optimizer=self.bayesian_optimizer,
             scoring=self._scoring[0] if self._scoring else 'f1',
+            strategy=self.strategy,
+            search_space=self.search_space,
+            n_trials=self.n_trials,
+            optuna_warmup_trials=self.optuna_warmup_trials,
+            optuna_directions=(self.optuna_directions or {self._scoring[0]: "maximize"}),
         )
         self.result_manager = ResultManager(
             scoring=self._scoring,
@@ -213,7 +253,7 @@ class HyperPhoenixCV(BaseEstimator):
         self.cv_executor = SklearnCVEvaluator(
             cv=self.cv,
             scoring=self.scoring,
-            n_jobs=self.n_jobs,
+            n_jobs=1 if self.parallelism == "trials" else self.n_jobs,
             verbose=self.verbose,
             pre_dispatch=self.pre_dispatch,
             error_score=self.error_score,
@@ -227,10 +267,15 @@ class HyperPhoenixCV(BaseEstimator):
         ):
             self.__dict__.pop(name, None)
 
+    def _is_multi_objective(self) -> bool:
+        return self.strategy == "optuna" and self.optuna_directions is not None and len(self.optuna_directions) > 1
+
     def _validate_refit(self) -> None:
         """Validate supported sklearn refit forms before creating a study."""
         metrics = self._scoring
         if isinstance(self.refit, bool):
+            if self._is_multi_objective() and self.refit:
+                raise ValueError("Multi-objective Optuna search requires refit=False, a metric name, or a callable")
             if self.refit and len(metrics) > 1:
                 raise ValueError(
                     "For multi-metric scoring, refit must be a scorer name, callable, or False."
@@ -243,6 +288,108 @@ class HyperPhoenixCV(BaseEstimator):
         if callable(self.refit):
             return
         raise ValueError("refit must be bool, scorer name, or callable")
+
+    def _validate_strategy(self) -> None:
+        if self.optuna_directions is not None:
+            if self.strategy != "optuna":
+                raise ValueError("optuna_directions requires strategy='optuna'")
+            if not isinstance(self.optuna_directions, Mapping):
+                raise TypeError("optuna_directions must be a mapping")
+            if set(self.optuna_directions) != set(self._scoring):
+                raise ValueError("optuna_directions keys must exactly match scoring metric names")
+            if any(value not in {"maximize", "minimize"} for value in self.optuna_directions.values()):
+                raise ValueError("optuna_directions values must be 'maximize' or 'minimize'")
+        elif self.strategy == "optuna" and len(self._scoring) != 1:
+            raise ValueError("multi-metric Optuna requires optuna_directions")
+        if self.intermediate_evaluator is not None and not callable(self.intermediate_evaluator):
+            raise TypeError("intermediate_evaluator must be callable or None")
+        if self.intermediate_evaluator is not None and self.strategy != "optuna":
+            raise ValueError("intermediate_evaluator requires strategy='optuna'")
+
+    def _worker_count(self) -> int:
+        if self.n_jobs == 0:
+            raise ValueError("n_jobs must not be 0")
+        if self.n_jobs > 0:
+            return self.n_jobs
+        return max(1, (os.cpu_count() or 1) + 1 + self.n_jobs)
+
+    def _validate_scheduler(self) -> None:
+        if self.parallelism not in {"trials", "folds"}:
+            raise ValueError("parallelism must be 'trials' or 'folds'")
+        self._worker_count()
+        if self.inner_max_num_threads is not None and self.inner_max_num_threads < 1:
+            raise ValueError("inner_max_num_threads must be a positive integer or None")
+        if self.trial_timeout is not None:
+            if self.trial_timeout <= 0:
+                raise ValueError("trial_timeout must be a positive number or None")
+            if self.parallelism != "trials" or self._worker_count() < 2:
+                raise ValueError("trial_timeout requires parallelism='trials' and n_jobs >= 2")
+        if self.joblib_batch_size != "auto" and (
+            not isinstance(self.joblib_batch_size, int) or self.joblib_batch_size < 1
+        ):
+            raise ValueError("joblib_batch_size must be 'auto' or a positive integer")
+        if self.cancel_callback is not None and not callable(self.cancel_callback):
+            raise ValueError("cancel_callback must be callable or None")
+
+    def _update_study_state(self, patch: dict) -> None:
+        state = self.study_store.study_state(self.study_id)
+        state.update(patch)
+        self.study_store.update_study_state(self.study_id, state)
+
+    def _evaluate_batch(self, proposals, X, y, groups, fit_params):
+        if self.intermediate_evaluator is not None:
+            # Cooperative path only. sklearn cross_validate has no honest
+            # mid-fit signal, hence plain CV never receives a prune request.
+            output = []
+            for params in proposals:
+                reporter = self.search_strategy.intermediate_reporter(params)
+                try:
+                    result = self.intermediate_evaluator(
+                        self.estimator, X, y, params, reporter, groups, fit_params or {}
+                    )
+                    if not isinstance(result, dict):
+                        raise TypeError("intermediate_evaluator must return a result dictionary")
+                    result.setdefault("params", params)
+                    diagnostics = result.setdefault("trial_diagnostics", {})
+                    if not isinstance(diagnostics, dict):
+                        raise TypeError("trial_diagnostics must be a dictionary")
+                    diagnostics.setdefault("intermediate_reports", reporter.diagnostics)
+                except Exception as exc:
+                    result = {"params": params, "error": str(exc), "error_type": type(exc).__name__,
+                              "trial_diagnostics": {"intermediate_reports": reporter.diagnostics}}
+                output.append(result)
+            return output
+        kwargs = [
+            {
+                "estimator": self.estimator, "X": X, "y": y,
+                "params": params, "groups": groups,
+                **({"fit_params": fit_params} if fit_params else {}),
+            }
+            for params in proposals
+        ]
+        if len(kwargs) == 1 and self.trial_timeout is None:
+            return [_evaluate_trial(self.cv_executor, kwargs[0])]
+        config = {
+            "backend": "loky", "n_jobs": self._worker_count() if self.trial_timeout is not None else len(kwargs),
+            "inner_max_num_threads": self.inner_max_num_threads,
+            "max_nbytes": self.memmap_max_nbytes,
+            "mmap_mode": "r",
+            "temp_folder": self.memmap_temp_folder,
+        }
+        with parallel_config(**config):
+            try:
+                return Parallel(timeout=self.trial_timeout, batch_size=self.joblib_batch_size)(
+                    delayed(_evaluate_trial)(self.cv_executor, item) for item in kwargs
+                )
+            except TimeoutError:
+                if len(kwargs) != 1:
+                    raise RuntimeError("scheduler timeout must evaluate exactly one trial")
+                return [{
+                    "params": kwargs[0]["params"],
+                    "error": f"trial exceeded timeout of {self.trial_timeout} seconds",
+                    "error_type": "TrialTimeout",
+                    "cancellation_reason": "trial_timeout",
+                }]
 
     def _format_metric_string(self, result: dict) -> str:
         """
@@ -310,9 +457,29 @@ class HyperPhoenixCV(BaseEstimator):
         return {
             "random_search": self.random_search,
             "use_bayesian_optimization": self.use_bayesian_optimization,
+            "strategy": self.strategy,
             "n_iter": self.n_iter,
+            "n_trials": self.n_trials,
+            "optuna_warmup_trials": self.optuna_warmup_trials,
+            "optuna_directions": dict(self.optuna_directions) if self.optuna_directions is not None else None,
             "early_stopping_patience": self.early_stopping_patience,
+            "parallelism": self.parallelism,
+            "trial_timeout": self.trial_timeout,
+            "memmap_max_nbytes": self.memmap_max_nbytes,
+            "joblib_batch_size": self.joblib_batch_size,
         }
+
+    def _identity_search_space(self):
+        """Stable identity projection for optional Optuna spaces."""
+        if self.search_space is None:
+            return self.param_grid
+        if callable(self.search_space):
+            if self.search_space_id is None:
+                raise ValueError(
+                    "Callable search_space requires search_space_id for safe checkpoint resume"
+                )
+            return {"optuna_callable": self.search_space_id}
+        return {str(name): repr(distribution) for name, distribution in self.search_space.items()}
 
     def _fit_impl(self, X, y, groups=None, fit_params: dict | None = None):
         """
@@ -334,6 +501,8 @@ class HyperPhoenixCV(BaseEstimator):
         """
         self._reset_fit_state()
         self._validate_refit()
+        self._validate_strategy()
+        self._validate_scheduler()
         if self.clear_checkpoint:
             warnings.warn(
                 "clear_checkpoint=True is deprecated and will be removed in 0.6; "
@@ -349,7 +518,7 @@ class HyperPhoenixCV(BaseEstimator):
             )
         self._study_identity = StudyIdentity.create(
             estimator=self.estimator,
-            param_grid=self.param_grid,
+            param_grid=self._identity_search_space(),
             scoring=self.scoring,
             cv=self.cv,
             random_state=self.random_state,
@@ -364,6 +533,22 @@ class HyperPhoenixCV(BaseEstimator):
             self.study_store = SQLiteStudyStore(self._storage_path())
 
         self.study_id = self.study_store.open_study(self._study_identity, resume=self.resume)
+        existing_scheduler = self.study_store.study_state(self.study_id).get("scheduler", {})
+        self._update_study_state({
+            "scheduler": {
+                **existing_scheduler,
+                "parallelism": self.parallelism,
+                "n_jobs": self.n_jobs,
+                "worker_count": self._worker_count(),
+                "inner_max_num_threads": self.inner_max_num_threads,
+                "trial_timeout": self.trial_timeout,
+                "memmap_max_nbytes": self.memmap_max_nbytes,
+                "memmap_temp_folder": self.memmap_temp_folder,
+                "joblib_batch_size": self.joblib_batch_size,
+                "attempts": existing_scheduler.get("attempts", len(self.study_store.results(self.study_id))),
+                "cancellation_reason": existing_scheduler.get("cancellation_reason"),
+            }
+        })
         # ``ParameterSampler`` must replay exactly after a process crash.  A
         # caller seed already has that property; for ``None`` allocate one once
         # and persist it before asking for any proposal.
@@ -411,7 +596,7 @@ class HyperPhoenixCV(BaseEstimator):
         best_score, no_improvement_count = _early_stop_from_results(
             checkpoint_results, primary_metric
         )
-        if early_stopping_enabled:
+        if early_stopping_enabled or self.trial_timeout is not None or self.cancel_callback is not None:
             saved_state = self.study_store.study_state(self.study_id).get("early_stopping", {})
             if (
                 saved_state.get("metric") == primary_metric
@@ -425,86 +610,88 @@ class HyperPhoenixCV(BaseEstimator):
         else:
             proposals_available = True
 
-        # Sequential scheduler for now: one proposal per ask. Phase 5 will ask
-        # batches based on worker capacity without changing this protocol.
+        # Exactly one primary axis: trials use bounded process batches with
+        # single-threaded CV; folds evaluate one trial at a time using n_jobs.
+        batch_size = self._worker_count() if self.parallelism == "trials" else 1
+        if early_stopping_enabled:
+            # Preserve strict patience semantics; a speculative batch could
+            # otherwise commit trials after the stop condition is met.
+            batch_size = 1
         i = 0
         while proposals_available:
-            proposals = self.search_strategy.ask(1)
+            if self.cancel_callback is not None:
+                cancellation = self.cancel_callback()
+                if cancellation:
+                    reason = cancellation if isinstance(cancellation, str) else "cancel_callback"
+                    scheduler = self.study_store.study_state(self.study_id).get("scheduler", {})
+                    self._update_study_state({"scheduler": {
+                        **scheduler, "cancellation_reason": reason,
+                    }})
+                    break
+            proposals = self.search_strategy.ask(batch_size)
             if not proposals:
                 break
-            params = proposals[0]
-            i += 1
-            if self.verbose:
-                print(f"\n[{i}/{total_candidates}] Testing: {params}")
+            results = self._evaluate_batch(proposals, X, y, groups, fit_params)
+            for params, result in zip(proposals, results):
+                i += 1
+                if self.verbose:
+                    print(f"\n[{i}/{total_candidates}] Testing: {params}")
+                metadata_fn = getattr(self.search_strategy, "result_metadata", None)
+                if metadata_fn is not None:
+                    result.update(metadata_fn(params))
+                if (self.strategy == "optuna" and "error" not in result
+                        and result.get("trial_state") != "pruned" and "objective_values" not in result):
+                    directions = self.optuna_directions or {self._scoring[0]: "maximize"}
+                    result["objective_values"] = {
+                        name: result[f"mean_test_{name}"] for name in directions
+                    }
+                if self.study_store.commit_trial(self.study_id, params, result):
+                    self.result_manager.add_result(result)
+                    self.search_strategy.tell([result])
+                    scheduler = self.study_store.study_state(self.study_id).get("scheduler", {})
+                    self._update_study_state({"scheduler": {
+                        **scheduler,
+                        "attempts": scheduler.get("attempts", 0) + 1,
+                        "cancellation_reason": result.get("cancellation_reason"),
+                    }})
 
-            evaluation_kwargs = {
-                "estimator": self.estimator, "X": X, "y": y,
-                "params": params, "groups": groups,
-            }
-            if fit_params:
-                evaluation_kwargs["fit_params"] = fit_params
-            result = self.cv_executor.evaluate(**evaluation_kwargs)
-            if self.study_store.commit_trial(self.study_id, params, result):
-                self.result_manager.add_result(result)
-                self.search_strategy.tell([result])
+                if self.verbose and 'error' not in result:
+                    current_str = self._format_metric_string(result)
+                    best_str = self._compute_best_metrics()
+                    print(f"Saved. Current: {current_str} | Best: {best_str}")
 
-            if self.verbose and 'error' not in result:
-                current_str = self._format_metric_string(result)
-                best_str = self._compute_best_metrics()
-                print(f"Saved. Current: {current_str} | Best: {best_str}")
-
-            # Early stopping logic
-            if early_stopping_enabled:
-                if 'error' not in result:
-                    current_score = result.get(f'mean_test_{primary_metric}', -float('inf'))
-                    if current_score > best_score + 1e-9:  # improvement
-                        best_score = current_score
-                        no_improvement_count = 0
-                        if self.verbose:
-                            print(f"🎯 Improvement detected (new best: {best_score:.4f})")
+                if early_stopping_enabled:
+                    if 'error' not in result:
+                        current_score = result.get(f'mean_test_{primary_metric}', -float('inf'))
+                        if current_score > best_score + 1e-9:
+                            best_score = current_score
+                            no_improvement_count = 0
+                        else:
+                            no_improvement_count += 1
                     else:
                         no_improvement_count += 1
-                        if self.verbose:
-                            print(f"⏳ No improvement ({no_improvement_count}/{self.early_stopping_patience})")
-                else:
-                    # Error counts as no improvement
-                    no_improvement_count += 1
-
-                if no_improvement_count >= self.early_stopping_patience:
-                    self.study_store.update_study_state(
-                        self.study_id,
-                        {
-                            "early_stopping": {
-                                "metric": primary_metric,
-                                "best_score": best_score,
-                                "no_improvement_count": no_improvement_count,
-                                "processed_trial_count": len(self.result_manager.results),
-                                "stop_reason": "patience_exhausted",
-                            }
-                        },
-                    )
-                    if self.verbose:
-                        print(f"🛑 Early stopping triggered after {i} iterations (no improvement for {self.early_stopping_patience} consecutive trials).")
-                    break
-
-                self.study_store.update_study_state(
-                    self.study_id,
-                    {
+                    stop_reason = None
+                    if no_improvement_count >= self.early_stopping_patience:
+                        stop_reason = "patience_exhausted"
+                        proposals_available = False
+                    self._update_study_state({
                         "early_stopping": {
                             "metric": primary_metric,
                             "best_score": best_score,
                             "no_improvement_count": no_improvement_count,
                             "processed_trial_count": len(self.result_manager.results),
-                            "stop_reason": None,
+                            "stop_reason": stop_reason,
                         }
-                    },
-                )
+                    })
+                    if not proposals_available:
+                        break
 
         # Save results to CSV
         self.result_manager.save_to_csv()
 
         # Update attributes for compatibility with GridSearchCV
         self.cv_results_ = self.result_manager.format_cv_results()
+        self.pareto_front_ = self._pareto_front() if self._is_multi_objective() else []
         self._update_best_attributes()
 
         # Refit the best estimator on the whole dataset
@@ -525,6 +712,8 @@ class HyperPhoenixCV(BaseEstimator):
 
     def _update_best_attributes(self):
         """Set best_params_, best_score_, and best_index_ from result_manager."""
+        if self._is_multi_objective() and self.refit is False:
+            return
         valid_results = [r for r in self.result_manager.results if 'error' not in r]
         if not valid_results:
             return
@@ -547,6 +736,37 @@ class HyperPhoenixCV(BaseEstimator):
 
         if not self.cv_results_ or 'params' not in self.cv_results_:
             self.best_index_ = None
+
+    def _pareto_front(self) -> list[dict]:
+        """Completed non-dominated Optuna trials in durable trial order."""
+        directions = self.optuna_directions or {}
+        candidates = [
+            (index, result) for index, result in enumerate(self.result_manager.results)
+            if result.get("trial_state", "completed") == "completed"
+            and "error" not in result and "objective_values" in result
+        ]
+        front = []
+        for index, result in candidates:
+            values = result["objective_values"]
+            dominated = False
+            for other_index, other in candidates:
+                if other_index == index:
+                    continue
+                other_values = other["objective_values"]
+                no_worse = all(
+                    other_values[name] >= values[name] if direction == "maximize" else other_values[name] <= values[name]
+                    for name, direction in directions.items()
+                )
+                better = any(
+                    other_values[name] > values[name] if direction == "maximize" else other_values[name] < values[name]
+                    for name, direction in directions.items()
+                )
+                if no_worse and better:
+                    dominated = True
+                    break
+            if not dominated:
+                front.append({"trial_index": index, "params": result["params"], "objective_values": values})
+        return front
 
     def predict(self, X):
         """
@@ -694,7 +914,7 @@ class HyperPhoenixCV(BaseEstimator):
         if hasattr(self, "_study_identity"):
             return self._study_identity
         return StudyIdentity.create(
-            estimator=self.estimator, param_grid=self.param_grid, scoring=self.scoring,
+            estimator=self.estimator, param_grid=self._identity_search_space(), scoring=self.scoring,
             cv=self.cv, random_state=self.random_state, dataset_id=self.dataset_id,
             scorer_id=self.scorer_id, cv_id=self.cv_id,
             strategy_config=self._strategy_identity_config(),

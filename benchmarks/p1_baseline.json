@@ -1,0 +1,5 @@
+{
+  "cheap": {"peak_rss_kib": 162712.0, "proposal_latency_seconds": 0.002715676, "store_commit_seconds_per_trial": 0.001639574, "throughput_trials_per_second": 43.65873},
+  "expensive": {"peak_rss_kib": 163352.0, "proposal_latency_seconds": 0.00352389, "store_commit_seconds_per_trial": 0.001707484, "throughput_trials_per_second": 31.509135},
+  "medium": {"peak_rss_kib": 162712.0, "proposal_latency_seconds": 0.006667211, "store_commit_seconds_per_trial": 0.001730818, "throughput_trials_per_second": 31.664668}
+}

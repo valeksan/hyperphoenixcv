@@ -14,8 +14,8 @@ HyperPhoenixCV — это умная библиотека для подбора 
 ## ✨ Возможности
 
 - **🔄 Возобновляемый поиск** — Продолжайте с последнего чекпоинта после любого прерывания.
-- **🧠 Байесовская оптимизация** — Находите лучшие параметры быстрее с помощью интеллектуального поиска.
-- **🎯 Несколько стратегий поиска** — Полный перебор, случайный поиск или предсказательная оптимизация.
+- **🎲 Режимы поиска** — Полный перебор или воспроизводимый случайный поиск.
+- **🎯 Несколько стратегий поиска** — Полный перебор или случайный поиск.
 - **📊 Оценка по нескольким метрикам** — Одновременное использование нескольких метрик (F1, accuracy, precision и др.).
 - **💾 Транзакционное хранение** — Trials инкрементально сохраняются в локальный SQLite; CSV — только экспорт.
 - **🔌 Совместимость с Scikit‑learn** — Бесшовная интеграция с экосистемой scikit‑learn.
@@ -53,7 +53,7 @@ pip install -e .
 | Возможность | `GridSearchCV` | `HyperPhoenixCV` |
 |-------------|----------------|------------------|
 | **Возобновляемость** | Начинает заново после прерывания | ✅ Продолжает с чекпоинта |
-| **Оптимизация** | Только полный перебор | ✅ Байесовская, случайная или полная |
+| **Оптимизация** | Только полный перебор | ✅ Случайная или полная |
 | **Мультиметричность** | Одна метрика за раз | ✅ Несколько метрик одновременно |
 | **Хранение результатов** | Требуется ручное сохранение | ✅ Транзакционный SQLite + экспорт CSV |
 | **Отслеживание прогресса** | Ограничено | ✅ Подробные логи и промежуточные результаты |
@@ -127,19 +127,55 @@ print(report)  # imported/skipped/failed и детали невалидных з
 
 ## 📚 Расширенное использование
 
-### Байесовская оптимизация
+### Deprecated surrogate ranking
 
-Включите байесовскую оптимизацию, чтобы сократить количество оценок:
+`use_bayesian_optimization=True` — временный compatibility API. Это **не**
+байесовская оптимизация: нет acquisition function или последовательного
+байесовского sampler. Используйте seeded random search или настоящий Optuna ask/tell:
 
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    use_bayesian_optimization=True,
-    n_iter=30,          # Количество итераций байесовской оптимизации
+    strategy="random",
+    n_trials=30,
     verbose=True
 )
 ```
+
+Установите optional backend:
+
+```bash
+pip install "hyperphoenixcv[optuna]"
+```
+
+```python
+import optuna
+
+hp = HyperPhoenixCV(
+    estimator=model,
+    param_grid=None,
+    strategy="optuna",
+    search_space={
+        "C": optuna.distributions.FloatDistribution(1e-4, 10, log=True),
+        "penalty": optuna.distributions.CategoricalDistribution(["l1", "l2"]),
+    },
+    n_trials=30,
+    optuna_warmup_trials=10,
+    random_state=42,
+)
+```
+
+Optuna использует настоящий `ask`/`tell`; terminal trials восстанавливаются из
+SQLite. `n_trials` ограничивает trials, включая resume. Для conditional space
+нужны `search_space(trial) -> dict` и стабильный `search_space_id`.
+
+Multi-objective требует `optuna_directions`, публикует `pareto_front_`.
+Используйте `refit=False`, имя метрики или callable; `refit=True` запрещён.
+Обычный sklearn CV не делает mid-fit pruning. Cooperative
+`intermediate_evaluator(estimator, X, y, params, report, groups, fit_params)`
+вызывает `report(step, value)` с возрастающими шагами; `True` -> безопасно
+остановить работу, вернуть `{"trial_state": "pruned"}`.
 
 ### Случайный поиск
 
@@ -149,8 +185,8 @@ hp = HyperPhoenixCV(
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    random_search=True,
-    n_iter=50           # Количество случайных комбинаций
+    strategy="random",
+    n_trials=50         # Количество случайных комбинаций
 )
 ```
 
@@ -162,7 +198,8 @@ hp = HyperPhoenixCV(
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    scoring=['f1', 'accuracy', 'precision']
+    scoring={'f1': 'f1', 'accuracy': 'accuracy', 'precision': 'precision'},
+    refit='f1',
 )
 ```
 
@@ -188,12 +225,16 @@ import numpy as np
 hp = HyperPhoenixCV(
     estimator=model,
     param_grid=param_grid,
-    n_jobs=4,                # Использовать 4 ядра CPU
-    pre_dispatch='2*n_jobs', # Ограничить количество одновременно запущенных задач
-    error_score=np.nan,      # Присваивать NaN при ошибках вместо исключения
+    n_jobs=4,
+    parallelism='trials',    # По умолчанию: до четырёх trials, CV однопоточный
+    inner_max_num_threads=1, # Число native threads на процесс trial
+    error_score=np.nan,
     verbose=True
 )
 ```
+
+`parallelism='folds'` запускает один trial за раз, распределяя `n_jobs` по
+folds. Вложенный параллелизм trials × folds намеренно не поддерживается.
 
 ### Ранняя остановка
 
@@ -251,6 +292,14 @@ hp.fit(X, y, groups=groups)
 - `scoring`: метрика(и) для оценки (строка, функция, список или словарь).
 - `cv`: int, сплиттер кросс‑валидации или итерируемый объект (по умолчанию=5).
 - `n_jobs`: количество параллельных jobs (по умолчанию=1).
+- `parallelism`: `"trials"` (по умолчанию) или `"folds"`; `n_jobs` работает только по одной оси.
+- `inner_max_num_threads`: опциональный лимит native threads для process-parallel trials.
+- `trial_timeout`: optional timeout одного trial в секундах. Требует
+  `parallelism="trials"` и `n_jobs >= 2`; timeout trial сохраняется как failed.
+- `cancel_callback`: optional callable без аргументов. Верните `True` или строку
+  причины, чтобы остановиться до следующего не начатого trial.
+- `memmap_max_nbytes`, `memmap_temp_folder`, `joblib_batch_size`: настройки
+  joblib process backend; массивы больше default `"1M"` используют read-only memmap.
 - `pre_dispatch`: управляет количеством одновременно запускаемых jobs (по умолчанию='2*n_jobs').
 - `error_score`: значение, присваиваемое при ошибке (по умолчанию=np.nan).
 - `early_stopping_patience`: количество итераций без улучшений для досрочной остановки (по умолчанию=None, отключено).
