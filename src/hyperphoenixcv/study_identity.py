@@ -77,6 +77,11 @@ def digest(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def param_key(params: Mapping[str, Any]) -> str:
+    """Stable, compact identifier for one canonical parameter assignment."""
+    return digest(params)
+
+
 def _scorer_config(scoring: Any, stable_id: str | None) -> Any:
     values = scoring if isinstance(scoring, list) else [scoring]
     if any(callable(value) for value in values):

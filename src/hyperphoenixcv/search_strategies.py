@@ -3,8 +3,8 @@ Search strategies for hyperparameter optimization.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from typing import List, Dict, Any, Optional
-import random
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import ParameterGrid
@@ -27,6 +27,16 @@ class SearchStrategy(ABC):
         """
         pass
 
+    @abstractmethod
+    def iter_parameters(self) -> Iterator[Dict[str, Any]]:
+        """Yield proposals without materializing the whole search space."""
+        pass
+
+    @abstractmethod
+    def total_candidates(self) -> int:
+        """Return finite candidate count without creating candidates."""
+        pass
+
     def suggest_next(self, completed_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Suggest next parameters based on completed results.
@@ -41,7 +51,14 @@ class ExhaustiveSearchStrategy(SearchStrategy):
     """
 
     def generate_parameters(self) -> List[Dict[str, Any]]:
-        return list(ParameterGrid(self.param_grid))
+        """Compatibility API. New engine code must use ``iter_parameters``."""
+        return list(self.iter_parameters())
+
+    def iter_parameters(self) -> Iterator[Dict[str, Any]]:
+        return iter(ParameterGrid(self.param_grid))
+
+    def total_candidates(self) -> int:
+        return len(ParameterGrid(self.param_grid))
 
 
 class RandomSearchStrategy(SearchStrategy):
@@ -60,12 +77,25 @@ class RandomSearchStrategy(SearchStrategy):
         self.random_state = random_state
 
     def generate_parameters(self) -> List[Dict[str, Any]]:
-        all_params = list(ParameterGrid(self.param_grid))
-        if len(all_params) <= self.n_iter:
-            return all_params
-        if self.random_state is not None:
-            random.seed(self.random_state)
-        return random.sample(all_params, self.n_iter)
+        """Compatibility API. New engine code must use ``iter_parameters``."""
+        return list(self.iter_parameters())
+
+    def iter_parameters(self) -> Iterator[Dict[str, Any]]:
+        grid = ParameterGrid(self.param_grid)
+        total = len(grid)
+        requested = min(max(self.n_iter, 0), total)
+        if requested == total:
+            yield from grid
+            return
+
+        # ``ParameterGrid.__getitem__`` computes one mixed-radix combination.
+        # Sampling indices therefore keeps memory O(n_iter), not O(grid size).
+        rng = np.random.default_rng(self.random_state)
+        for index in rng.choice(total, size=requested, replace=False):
+            yield grid[int(index)]
+
+    def total_candidates(self) -> int:
+        return min(max(self.n_iter, 0), len(ParameterGrid(self.param_grid)))
 
 
 class BayesianSearchStrategy(SearchStrategy):
@@ -114,7 +144,13 @@ class BayesianSearchStrategy(SearchStrategy):
                 self.label_encoders[param] = le
 
     def generate_parameters(self) -> List[Dict[str, Any]]:
-        return list(ParameterGrid(self.param_grid))
+        return list(self.iter_parameters())
+
+    def iter_parameters(self) -> Iterator[Dict[str, Any]]:
+        return iter(ParameterGrid(self.param_grid))
+
+    def total_candidates(self) -> int:
+        return len(ParameterGrid(self.param_grid))
 
     def suggest_next(self, completed_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not completed_results:

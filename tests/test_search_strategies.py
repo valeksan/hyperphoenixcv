@@ -4,6 +4,7 @@ Unit tests for search strategies.
 
 import pytest
 import numpy as np
+import random
 from sklearn.ensemble import RandomForestRegressor
 
 from src.hyperphoenixcv.search_strategies import (
@@ -45,6 +46,15 @@ class TestExhaustiveSearchStrategy:
         assert {'a': 1} in suggested
         assert {'a': 2} in suggested
 
+    def test_iter_parameters_is_lazy_for_large_grid(self):
+        strategy = ExhaustiveSearchStrategy({"a": range(10_000_000)})
+
+        params = strategy.iter_parameters()
+
+        assert iter(params) is params
+        assert strategy.total_candidates() == 10_000_000
+        assert next(params) == {"a": 0}
+
 
 class TestRandomSearchStrategy:
     """Test RandomSearchStrategy."""
@@ -80,6 +90,27 @@ class TestRandomSearchStrategy:
         # We just check that each suggested param is in grid
         for p in suggested:
             assert p['a'] in [1, 2, 3]
+
+    def test_iter_parameters_does_not_mutate_global_rng(self):
+        random.seed(931)
+        np.random.seed(931)
+        expected_python = random.random()
+        expected_numpy = np.random.random()
+
+        random.seed(931)
+        np.random.seed(931)
+        strategy = RandomSearchStrategy({"a": range(10_000_000)}, n_iter=3, random_state=42)
+
+        params = list(strategy.iter_parameters())
+
+        assert len(params) == 3
+        assert len({item["a"] for item in params}) == 3
+        assert random.random() == expected_python
+        assert np.random.random() == expected_numpy
+
+    def test_total_candidates_respects_n_iter(self):
+        strategy = RandomSearchStrategy({"a": [1, 2]}, n_iter=10)
+        assert strategy.total_candidates() == 2
 
 
 class TestBayesianSearchStrategy:

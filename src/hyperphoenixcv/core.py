@@ -309,19 +309,20 @@ class HyperPhoenixCV(BaseEstimator):
         checkpoint_results = self.study_store.results(self.study_id)
         self.result_manager.add_results(checkpoint_results)
 
-        # Generate all parameter combinations
-        all_params = self.search_strategy.generate_parameters()
+        # Keep candidate generation lazy. Large grids must not consume RAM before
+        # their first trial starts.
+        total_candidates = self.search_strategy.total_candidates()
         if self.verbose:
-            print(f"Total combinations: {len(all_params)}")
+            print(f"Total combinations: {total_candidates}")
 
-        # Exclude already processed
+        # Exclude already processed without a materialized ``remaining_params``.
         completed_keys = self.study_store.completed_param_keys(self.study_id)
-        remaining_params = [
-            p for p in all_params
+        remaining_params = (
+            p for p in self.search_strategy.iter_parameters()
             if self.result_manager.param_key(p) not in completed_keys
-        ]
+        )
         if self.verbose:
-            print(f"Remaining to process: {len(remaining_params)}")
+            print(f"Completed trials: {len(completed_keys)}")
 
         # If Bayesian optimization is used, sort remaining parameters by prediction
         if self.use_bayesian_optimization:
@@ -345,7 +346,7 @@ class HyperPhoenixCV(BaseEstimator):
         # Iterate over remaining parameters
         for i, params in enumerate(remaining_params, start=1):
             if self.verbose:
-                print(f"\n[{i}/{len(remaining_params)}] Testing: {params}")
+                print(f"\n[{i}/{total_candidates}] Testing: {params}")
 
             result = self.cv_executor.evaluate(
                 estimator=self.estimator,
@@ -401,10 +402,8 @@ class HyperPhoenixCV(BaseEstimator):
             if hasattr(self, "best_score_"):
                 print(f"Best result ({self._scoring[0]}): {self.best_score_:.4f}")
             if self.random_search:
-                total_grid = len(all_params)
                 print(
-                    f"Random search used: {self.n_iter} out of {total_grid} "
-                    f"possible combinations ({self.n_iter/total_grid*100:.2f}%)"
+                    f"Random search used: {total_candidates} candidates."
                 )
 
         return self

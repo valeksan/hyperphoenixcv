@@ -10,10 +10,10 @@ import sqlite3
 from typing import Any, Iterator
 from uuid import uuid4
 
-from ..study_identity import StudyIdentity, canonicalize, mismatch_fields
+from ..study_identity import StudyIdentity, canonicalize, mismatch_fields, param_key
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class StudyStoreError(ValueError):
@@ -122,6 +122,18 @@ class SQLiteStudyStore:
                     PRAGMA user_version = {SCHEMA_VERSION};
                 """
             )
+        elif version == 1:
+            # Version 1 stored canonical JSON in ``param_key``. Convert it to
+            # a compact SHA-256 key before new resume logic reads the rows.
+            with self._transaction() as conn:
+                rows = conn.execute("SELECT trial_id, params_json FROM trials").fetchall()
+                for row in rows:
+                    params = _restore(json.loads(row["params_json"]))
+                    conn.execute(
+                        "UPDATE trials SET param_key = ? WHERE trial_id = ?",
+                        (param_key(params), row["trial_id"]),
+                    )
+                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @staticmethod
     def _identity(row: sqlite3.Row) -> StudyIdentity:
@@ -183,11 +195,11 @@ class SQLiteStudyStore:
 
     def commit_trial(self, study_id: str, params: dict[str, Any], result: dict[str, Any]) -> bool:
         """Atomically store terminal trial. False means same param already committed."""
-        param_key, now = _json(params), _now()
+        params_key, now = param_key(params), _now()
         state = "failed" if "error" in result else "completed"
         with self._transaction() as conn:
             exists = conn.execute(
-                "SELECT 1 FROM trials WHERE study_id = ? AND param_key = ?", (study_id, param_key)
+                "SELECT 1 FROM trials WHERE study_id = ? AND param_key = ?", (study_id, params_key)
             ).fetchone()
             if exists:
                 return False
@@ -199,7 +211,7 @@ class SQLiteStudyStore:
                     study_id, sequence, state, param_key, params_json, result_json,
                     exception_type, exception_message, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (study_id, sequence, state, param_key, _json(params), _json(result),
+                (study_id, sequence, state, params_key, _json(params), _json(result),
                  type(result.get("error")).__name__ if "error" in result else None,
                  str(result["error"]) if "error" in result else None, now, now),
             )

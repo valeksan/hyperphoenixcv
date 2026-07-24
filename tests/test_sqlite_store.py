@@ -5,7 +5,7 @@ import pytest
 from sklearn.linear_model import LogisticRegression
 
 from hyperphoenixcv.storage.sqlite_store import SQLiteStudyStore, StudyMismatchError
-from hyperphoenixcv.study_identity import StudyIdentity
+from hyperphoenixcv.study_identity import StudyIdentity, canonical_json, param_key
 
 
 def identity(dataset_id="train-v1"):
@@ -58,8 +58,28 @@ def test_migrates_zero_version_database(tmp_path):
         study_id = store.open_study(identity())
         assert store.commit_trial(study_id, {"C": 0.1}, result())
     connection = sqlite3.connect(path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
     connection.close()
+
+
+def test_migrates_v1_canonical_parameter_key_without_losing_idempotency(tmp_path):
+    path = tmp_path / "previous.sqlite3"
+    with SQLiteStudyStore(str(path)) as store:
+        study_id = store.open_study(identity())
+        assert store.commit_trial(study_id, {"C": 0.1}, result())
+
+    connection = sqlite3.connect(path)
+    connection.execute(
+        "UPDATE trials SET param_key = ? WHERE study_id = ?",
+        (canonical_json({"C": 0.1}), study_id),
+    )
+    connection.execute("PRAGMA user_version = 1")
+    connection.commit()
+    connection.close()
+
+    with SQLiteStudyStore(str(path)) as store:
+        assert store.completed_param_keys(study_id) == {param_key({"C": 0.1})}
+        assert not store.commit_trial(study_id, {"C": 0.1}, result(0.1))
 
 
 def test_store_rejects_mismatched_auto_resume(tmp_path):

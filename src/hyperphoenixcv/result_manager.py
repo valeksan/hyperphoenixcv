@@ -6,7 +6,7 @@ import pandas as pd
 import json
 from typing import List, Dict, Any, Optional
 
-from .study_identity import canonical_json
+from .study_identity import param_key
 
 
 class ResultManager:
@@ -27,7 +27,7 @@ class ResultManager:
     @staticmethod
     def param_key(params: Dict[str, Any]) -> str:
         """Stable key used to make one study's result projection idempotent."""
-        return canonical_json(params)
+        return param_key(params)
 
     def add_result(self, result: Dict[str, Any]):
         """

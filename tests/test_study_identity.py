@@ -4,6 +4,7 @@ from sklearn.linear_model import LogisticRegression
 from hyperphoenixcv.study_identity import (
     StudyIdentity,
     UnsupportedIdentityValueError,
+    param_key,
 )
 from hyperphoenixcv.storage.sqlite_store import SQLiteStudyStore, StudyMismatchError
 
@@ -29,6 +30,15 @@ def test_identity_is_stable_when_grid_dict_order_changes():
 
     assert first.space_digest == second.space_digest
     assert first.config_digest == second.config_digest
+
+
+def test_param_key_is_sha256_and_stable_when_dictionary_order_changes():
+    first = param_key({"C": 1.0, "solver": "lbfgs"})
+    second = param_key({"solver": "lbfgs", "C": 1.0})
+
+    assert first == second
+    assert len(first) == 64
+    assert all(char in "0123456789abcdef" for char in first)
 
 
 @pytest.mark.parametrize(
