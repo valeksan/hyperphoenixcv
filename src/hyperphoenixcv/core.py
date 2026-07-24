@@ -8,7 +8,6 @@ of scikit-learn's GridSearchCV by adding checkpoint support, random search,
 and Bayesian optimization to accelerate the search for optimal hyperparameters.
 """
 
-import os
 import warnings
 from pathlib import Path
 import numpy as np
@@ -18,7 +17,7 @@ from sklearn.base import BaseEstimator, clone
 from sklearn.exceptions import NotFittedError
 
 from .search_strategies import create_search_strategy
-from .checkpoint import CheckpointManager
+from .legacy_pickle import load_legacy_results, validate_legacy_result
 from .result_manager import ResultManager
 from .cv_executor import CVExecutor
 from .study_identity import StudyIdentity
@@ -539,6 +538,42 @@ class HyperPhoenixCV(BaseEstimator):
         temp_manager.add_results(checkpoint_results)
         return temp_manager.get_top_results(n)
 
+    def import_legacy_checkpoint(self, path: str, *, trusted: bool = False) -> dict:
+        """Import trusted legacy ``List[dict]`` pickle data into SQLite.
+
+        Pickle/joblib deserialization can execute arbitrary code. Set
+        ``trusted=True`` only after verifying source and provenance of ``path``.
+        Normal ``fit`` and resume never read pickle checkpoints. Repeating this
+        import is idempotent: existing parameter combinations are skipped.
+        """
+        legacy_results = load_legacy_results(path, trusted=trusted)
+        report = {
+            "imported": 0,
+            "skipped": 0,
+            "failed": 0,
+            "failures": [],
+            "skipped_indices": [],
+        }
+        with SQLiteStudyStore(self._storage_path()) as store:
+            study_id = store.open_study(self._identity_for_loading(), resume="auto")
+            report["study_id"] = study_id
+            for index, result in enumerate(legacy_results):
+                problem = validate_legacy_result(result)
+                if problem is not None:
+                    report["failed"] += 1
+                    report["failures"].append({"index": index, "reason": problem})
+                    continue
+                try:
+                    if store.commit_trial(study_id, result["params"], result):
+                        report["imported"] += 1
+                    else:
+                        report["skipped"] += 1
+                        report["skipped_indices"].append(index)
+                except Exception as exc:
+                    report["failed"] += 1
+                    report["failures"].append({"index": index, "reason": str(exc)})
+        return report
+
     def _identity_for_loading(self):
         if hasattr(self, "_study_identity"):
             return self._study_identity
@@ -557,7 +592,8 @@ class HyperPhoenixCV(BaseEstimator):
 
     def _save_checkpoint(self, results):
         """
-        Private method for backward compatibility.
-        Saves results to checkpoint.
+        Removed private pickle persistence path.
         """
-        CheckpointManager(self.checkpoint_path, verbose=self.verbose).save(results)
+        raise RuntimeError(
+            "Pickle checkpoint persistence was removed. SQLite is the source of truth."
+        )

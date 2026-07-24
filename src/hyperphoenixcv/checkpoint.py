@@ -10,9 +10,7 @@ from typing import List, Dict, Any
 
 from .study_identity import (
     CheckpointEnvelope,
-    CheckpointMismatchError,
     StudyIdentity,
-    mismatch_fields,
 )
 
 
@@ -27,13 +25,10 @@ class CheckpointManager:
         self.envelope: CheckpointEnvelope | None = None
 
     def _load_raw(self) -> Any:
-        try:
-            return joblib.load(self.checkpoint_path)
-        except Exception as exc:
-            raise CheckpointCorruptionError(
-                f"Cannot read checkpoint {self.checkpoint_path}. It may be corrupt; "
-                "restore a known-good checkpoint or start with resume='never'."
-            ) from exc
+        raise RuntimeError(
+            "Implicit pickle loading was removed. Use "
+            "HyperPhoenixCV.import_legacy_checkpoint(path, trusted=True)."
+        )
 
     def _atomic_dump(self, value: Any) -> None:
         target = Path(self.checkpoint_path)
@@ -63,30 +58,10 @@ class CheckpointManager:
         identity: StudyIdentity,
         resume: str = "auto",
     ) -> CheckpointEnvelope | None:
-        if resume not in {"auto", "must", "never"}:
-            raise ValueError("resume must be one of: 'auto', 'must', 'never'")
-        if resume == "never":
-            return None
-        if not os.path.exists(self.checkpoint_path):
-            if resume == "must":
-                raise FileNotFoundError(
-                    f"Checkpoint required by resume='must' does not exist: {self.checkpoint_path}"
-                )
-            if self.verbose:
-                print(f"No checkpoint found at {self.checkpoint_path}.")
-            return None
-
-        envelope = CheckpointEnvelope.from_dict(self._load_raw())
-        changed = mismatch_fields(identity, envelope.identity)
-        if changed:
-            raise CheckpointMismatchError(
-                f"Checkpoint {self.checkpoint_path} belongs to a different study; "
-                f"changed: {', '.join(changed)}. Use a new checkpoint_path or resume='never'."
-            )
-        self.envelope = envelope
-        if self.verbose:
-            print(f"Loaded {len(envelope.results)} completed combinations from checkpoint.")
-        return envelope
+        raise RuntimeError(
+            "Automatic pickle resume was removed. Use SQLite resume or explicit "
+            "HyperPhoenixCV.import_legacy_checkpoint(path, trusted=True)."
+        )
 
     def load(self) -> List[Dict[str, Any]]:
         """
@@ -95,22 +70,10 @@ class CheckpointManager:
         Returns:
             List of results (each result is a dict with at least 'params' key).
         """
-        if os.path.exists(self.checkpoint_path):
-            loaded = self._load_raw()
-            if isinstance(loaded, dict):
-                envelope = CheckpointEnvelope.from_dict(loaded)
-                self.envelope = envelope
-                if self.verbose:
-                    print(f"Loaded {len(envelope.results)} completed combinations from checkpoint.")
-                return envelope.results
-            if isinstance(loaded, list):
-                if self.verbose:
-                    print(f"Loaded {len(loaded)} completed combinations from checkpoint.")
-                return loaded
-            raise ValueError(f"Invalid legacy checkpoint at {self.checkpoint_path}")
-        if self.verbose:
-            print(f"No checkpoint found at {self.checkpoint_path}.")
-        return []
+        raise RuntimeError(
+            "Implicit pickle loading was removed. Use "
+            "HyperPhoenixCV.import_legacy_checkpoint(path, trusted=True)."
+        )
 
     def save(
         self,

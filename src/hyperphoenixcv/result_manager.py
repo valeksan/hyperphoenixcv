@@ -3,8 +3,6 @@ Result manager for storing, sorting, and exporting hyperparameter search results
 """
 
 import pandas as pd
-import joblib
-import os
 import json
 from typing import List, Dict, Any, Optional
 
@@ -49,16 +47,12 @@ class ResultManager:
 
     def load_from_checkpoint(self, checkpoint_path: str) -> List[Dict[str, Any]]:
         """
-        Load results from a checkpoint file and add them to the internal list.
-
-        Returns:
-            Loaded results (same as returned by CheckpointManager.load()).
+        Removed implicit pickle loading path.
         """
-        if not os.path.exists(checkpoint_path):
-            return []
-        loaded = joblib.load(checkpoint_path)
-        self.add_results(loaded)
-        return loaded
+        raise RuntimeError(
+            "Implicit pickle loading was removed. Use "
+            "HyperPhoenixCV.import_legacy_checkpoint(path, trusted=True)."
+        )
 
     def clear_results(self):
         """
