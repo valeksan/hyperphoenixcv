@@ -8,6 +8,8 @@ import os
 import json
 from typing import List, Dict, Any, Optional
 
+from .study_identity import canonical_json
+
 
 class ResultManager:
     """
@@ -27,10 +29,7 @@ class ResultManager:
     @staticmethod
     def param_key(params: Dict[str, Any]) -> str:
         """Stable key used to make one study's result projection idempotent."""
-        try:
-            return json.dumps(params, sort_keys=True, separators=(",", ":"), default=repr)
-        except (TypeError, ValueError):
-            return repr(sorted(params.items()))
+        return canonical_json(params)
 
     def add_result(self, result: Dict[str, Any]):
         """

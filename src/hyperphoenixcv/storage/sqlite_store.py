@@ -1,0 +1,214 @@
+"""SQLite source of truth for HyperPhoenixCV studies and trials."""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from datetime import datetime, timezone
+import json
+from pathlib import Path
+import sqlite3
+from typing import Any, Iterator
+from uuid import uuid4
+
+from ..study_identity import StudyIdentity, canonicalize, mismatch_fields
+
+
+SCHEMA_VERSION = 1
+
+
+class StudyStoreError(ValueError):
+    """SQLite study storage cannot satisfy requested operation."""
+
+
+class StudyMismatchError(StudyStoreError):
+    """Storage path already belongs to another study."""
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _json(value: Any) -> str:
+    return json.dumps(canonicalize(value), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _restore(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_restore(item) for item in value]
+    if isinstance(value, dict):
+        if set(value) == {"__tuple__"}:
+            return tuple(_restore(item) for item in value["__tuple__"])
+        if set(value) == {"__set__"}:
+            return set(_restore(item) for item in value["__set__"])
+        return {key: _restore(item) for key, item in value.items()}
+    return value
+
+
+class SQLiteStudyStore:
+    """One-process local SQLite store. No shared-filesystem locking guarantee."""
+
+    def __init__(self, path: str):
+        self.path = str(path)
+        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
+        self.connection = sqlite3.connect(self.path, timeout=30, isolation_level=None)
+        self.connection.row_factory = sqlite3.Row
+        self.connection.execute("PRAGMA foreign_keys = ON")
+        self.connection.execute("PRAGMA journal_mode = WAL")
+        self.connection.execute("PRAGMA synchronous = FULL")
+        self._migrate()
+
+    def close(self) -> None:
+        if self.connection is not None:
+            self.connection.close()
+            self.connection = None
+
+    def __enter__(self) -> "SQLiteStudyStore":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
+
+    @contextmanager
+    def _transaction(self) -> Iterator[sqlite3.Connection]:
+        try:
+            self.connection.execute("BEGIN IMMEDIATE")
+            yield self.connection
+        except BaseException:
+            self.connection.execute("ROLLBACK")
+            raise
+        else:
+            self.connection.execute("COMMIT")
+
+    def _migrate(self) -> None:
+        version = self.connection.execute("PRAGMA user_version").fetchone()[0]
+        if version > SCHEMA_VERSION:
+            raise StudyStoreError(
+                f"Unsupported SQLite schema version {version}; expected <= {SCHEMA_VERSION}"
+            )
+        if version == 0:
+            self.connection.executescript(
+                f"""
+                    CREATE TABLE IF NOT EXISTS studies (
+                        study_id TEXT PRIMARY KEY,
+                        dataset_id TEXT,
+                        estimator_digest TEXT NOT NULL,
+                        space_digest TEXT NOT NULL,
+                        cv_digest TEXT NOT NULL,
+                        scorer_digest TEXT NOT NULL,
+                        seed INTEGER,
+                        config_digest TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS studies_config_digest_idx
+                        ON studies(config_digest);
+                    CREATE TABLE IF NOT EXISTS trials (
+                        trial_id INTEGER PRIMARY KEY,
+                        study_id TEXT NOT NULL REFERENCES studies(study_id) ON DELETE CASCADE,
+                        sequence INTEGER NOT NULL,
+                        state TEXT NOT NULL CHECK(state IN ('completed', 'failed')),
+                        param_key TEXT NOT NULL,
+                        params_json TEXT NOT NULL,
+                        result_json TEXT NOT NULL,
+                        exception_type TEXT,
+                        exception_message TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        UNIQUE(study_id, param_key),
+                        UNIQUE(study_id, sequence)
+                    );
+                    CREATE INDEX IF NOT EXISTS trials_study_sequence_idx
+                        ON trials(study_id, sequence);
+                    PRAGMA user_version = {SCHEMA_VERSION};
+                """
+            )
+
+    @staticmethod
+    def _identity(row: sqlite3.Row) -> StudyIdentity:
+        return StudyIdentity(
+            dataset_id=row["dataset_id"], estimator_digest=row["estimator_digest"],
+            space_digest=row["space_digest"], cv_digest=row["cv_digest"],
+            scorer_digest=row["scorer_digest"], seed=row["seed"],
+            config_digest=row["config_digest"],
+        )
+
+    def open_study(self, identity: StudyIdentity, resume: str = "auto") -> str:
+        if resume not in {"auto", "must", "never"}:
+            raise ValueError("resume must be one of: 'auto', 'must', 'never'")
+        rows = self.connection.execute(
+            "SELECT * FROM studies ORDER BY created_at DESC"
+        ).fetchall()
+        exact = next((row for row in rows if row["config_digest"] == identity.config_digest), None)
+        if resume != "never" and exact is not None:
+            return exact["study_id"]
+        if resume == "must":
+            if not rows:
+                raise FileNotFoundError(f"Study required by resume='must' does not exist: {self.path}")
+            changed = mismatch_fields(identity, self._identity(rows[0]))
+            raise StudyMismatchError(
+                f"SQLite store {self.path} belongs to a different study; changed: {', '.join(changed)}. "
+                "Use a new storage_path or resume='never'."
+            )
+        if resume == "auto" and rows:
+            changed = mismatch_fields(identity, self._identity(rows[0]))
+            raise StudyMismatchError(
+                f"SQLite store {self.path} belongs to a different study; changed: {', '.join(changed)}. "
+                "Use a new storage_path or resume='never'."
+            )
+        study_id, now = str(uuid4()), _now()
+        with self._transaction() as conn:
+            conn.execute(
+                """INSERT INTO studies (
+                    study_id, dataset_id, estimator_digest, space_digest, cv_digest,
+                    scorer_digest, seed, config_digest, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (study_id, identity.dataset_id, identity.estimator_digest, identity.space_digest,
+                 identity.cv_digest, identity.scorer_digest, identity.seed,
+                 identity.config_digest, now, now),
+            )
+        return study_id
+
+    def completed_param_keys(self, study_id: str) -> set[str]:
+        return {
+            row[0] for row in self.connection.execute(
+                "SELECT param_key FROM trials WHERE study_id = ?", (study_id,)
+            )
+        }
+
+    def results(self, study_id: str) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT result_json FROM trials WHERE study_id = ? ORDER BY sequence", (study_id,)
+        ).fetchall()
+        return [_restore(json.loads(row["result_json"])) for row in rows]
+
+    def commit_trial(self, study_id: str, params: dict[str, Any], result: dict[str, Any]) -> bool:
+        """Atomically store terminal trial. False means same param already committed."""
+        param_key, now = _json(params), _now()
+        state = "failed" if "error" in result else "completed"
+        with self._transaction() as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM trials WHERE study_id = ? AND param_key = ?", (study_id, param_key)
+            ).fetchone()
+            if exists:
+                return False
+            sequence = conn.execute(
+                "SELECT COALESCE(MAX(sequence), 0) + 1 FROM trials WHERE study_id = ?", (study_id,)
+            ).fetchone()[0]
+            conn.execute(
+                """INSERT INTO trials (
+                    study_id, sequence, state, param_key, params_json, result_json,
+                    exception_type, exception_message, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (study_id, sequence, state, param_key, _json(params), _json(result),
+                 type(result.get("error")).__name__ if "error" in result else None,
+                 str(result["error"]) if "error" in result else None, now, now),
+            )
+            conn.execute("UPDATE studies SET updated_at = ? WHERE study_id = ?", (now, study_id))
+        return True
+
+    def clear(self) -> None:
+        self.close()
+        for suffix in ("", "-wal", "-shm"):
+            target = Path(f"{self.path}{suffix}")
+            if target.exists():
+                target.unlink()

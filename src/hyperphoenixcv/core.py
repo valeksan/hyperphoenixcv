@@ -10,6 +10,7 @@ and Bayesian optimization to accelerate the search for optimal hyperparameters.
 
 import os
 import warnings
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from typing import Union
@@ -21,6 +22,7 @@ from .checkpoint import CheckpointManager
 from .result_manager import ResultManager
 from .cv_executor import CVExecutor
 from .study_identity import StudyIdentity
+from .storage import SQLiteStudyStore
 
 
 class HyperPhoenixCV(BaseEstimator):
@@ -90,6 +92,7 @@ class HyperPhoenixCV(BaseEstimator):
         resume: str = "auto",
         scorer_id: str | None = None,
         cv_id: str | None = None,
+        storage_path: str | None = None,
     ):
         """
         Initializes HyperPhoenixCV.
@@ -161,6 +164,7 @@ class HyperPhoenixCV(BaseEstimator):
         self.resume = resume
         self.scorer_id = scorer_id
         self.cv_id = cv_id
+        self.storage_path = storage_path
 
     @property
     def _scoring(self):
@@ -178,10 +182,6 @@ class HyperPhoenixCV(BaseEstimator):
             bayesian_optimizer=self.bayesian_optimizer,
             scoring=self._scoring[0] if self._scoring else 'f1',
         )
-        self.checkpoint_manager = CheckpointManager(
-            checkpoint_path=self.checkpoint_path,
-            verbose=self.verbose,
-        )
         self.result_manager = ResultManager(
             scoring=self._scoring,
             results_csv=self.results_csv,
@@ -198,7 +198,7 @@ class HyperPhoenixCV(BaseEstimator):
     def _reset_fit_state(self):
         """Discard runtime and fitted state from a previous fit attempt."""
         for name in (
-            "search_strategy", "checkpoint_manager", "result_manager", "cv_executor",
+            "search_strategy", "study_store", "study_id", "result_manager", "cv_executor",
             "_study_identity", "best_params_", "best_score_", "best_estimator_", "cv_results_", "best_index_",
         ):
             self.__dict__.pop(name, None)
@@ -251,6 +251,20 @@ class HyperPhoenixCV(BaseEstimator):
         return " | ".join(best_metrics)
 
     def fit(self, X, y, groups=None):
+        """Run search with SQLite as transactional source of truth."""
+        try:
+            return self._fit_impl(X, y, groups)
+        finally:
+            store = self.__dict__.get("study_store")
+            if store is not None:
+                store.close()
+
+    def _storage_path(self) -> str:
+        if self.storage_path is not None:
+            return self.storage_path
+        return str(Path(self.checkpoint_path).with_suffix(".sqlite3"))
+
+    def _fit_impl(self, X, y, groups=None):
         """
         Performs hyperparameter tuning with intermediate result saving.
 
@@ -286,15 +300,13 @@ class HyperPhoenixCV(BaseEstimator):
             cv_id=self.cv_id,
         )
         self._create_runtime_components()
+        self.study_store = SQLiteStudyStore(self._storage_path())
         if self.clear_checkpoint:
-            self.checkpoint_manager.clear()
+            self.study_store.clear()
+            self.study_store = SQLiteStudyStore(self._storage_path())
 
-        # Load progress from checkpoint
-        envelope = self.checkpoint_manager.load_envelope(
-            self._study_identity,
-            resume=self.resume,
-        )
-        checkpoint_results = [] if envelope is None else envelope.results
+        self.study_id = self.study_store.open_study(self._study_identity, resume=self.resume)
+        checkpoint_results = self.study_store.results(self.study_id)
         self.result_manager.add_results(checkpoint_results)
 
         # Generate all parameter combinations
@@ -303,8 +315,11 @@ class HyperPhoenixCV(BaseEstimator):
             print(f"Total combinations: {len(all_params)}")
 
         # Exclude already processed
-        completed_params = [r['params'] for r in checkpoint_results if 'params' in r]
-        remaining_params = [p for p in all_params if p not in completed_params]
+        completed_keys = self.study_store.completed_param_keys(self.study_id)
+        remaining_params = [
+            p for p in all_params
+            if self.result_manager.param_key(p) not in completed_keys
+        ]
         if self.verbose:
             print(f"Remaining to process: {len(remaining_params)}")
 
@@ -339,8 +354,8 @@ class HyperPhoenixCV(BaseEstimator):
                 params=params,
                 groups=groups,
             )
-            self.result_manager.add_result(result)
-            self.checkpoint_manager.save(self.result_manager.results, self._study_identity)
+            if self.study_store.commit_trial(self.study_id, params, result):
+                self.result_manager.add_result(result)
 
             if self.verbose and 'error' not in result:
                 current_str = self._format_metric_string(result)
@@ -499,11 +514,11 @@ class HyperPhoenixCV(BaseEstimator):
         `clear_checkpoint` is a sklearn constructor parameter, so it cannot
         also be an instance method.
         """
-        CheckpointManager(self.checkpoint_path, verbose=self.verbose).clear()
+        SQLiteStudyStore(self._storage_path()).clear()
 
     def load_results_from_checkpoint(self, n: int = 10) -> pd.DataFrame:
         """
-        Loads results from a checkpoint and returns top‑N.
+        Loads results from SQLite storage and returns top‑N.
         Useful when fit() was interrupted and CSV was not created.
 
         Parameters:
@@ -516,18 +531,29 @@ class HyperPhoenixCV(BaseEstimator):
         pd.DataFrame
             Top‑N results from the checkpoint
         """
-        # Load checkpoint directly (bypassing result_manager)
-        checkpoint_results = CheckpointManager(self.checkpoint_path, verbose=self.verbose).load()
+        with SQLiteStudyStore(self._storage_path()) as store:
+            study_id = store.open_study(self._identity_for_loading(), resume="must")
+            checkpoint_results = store.results(study_id)
         # Create a temporary ResultManager to format results
         temp_manager = ResultManager(scoring=self._scoring)
         temp_manager.add_results(checkpoint_results)
         return temp_manager.get_top_results(n)
+
+    def _identity_for_loading(self):
+        if hasattr(self, "_study_identity"):
+            return self._study_identity
+        return StudyIdentity.create(
+            estimator=self.estimator, param_grid=self.param_grid, scoring=self.scoring,
+            cv=self.cv, random_state=self.random_state, dataset_id=self.dataset_id,
+            scorer_id=self.scorer_id, cv_id=self.cv_id,
+        )
     def _load_checkpoint(self):
         """
-        Private method for backward compatibility.
-        Returns the list of results from the checkpoint.
+        Private compatibility method. Returns SQLite trial projection.
         """
-        return CheckpointManager(self.checkpoint_path, verbose=self.verbose).load()
+        with SQLiteStudyStore(self._storage_path()) as store:
+            study_id = store.open_study(self._identity_for_loading(), resume="must")
+            return store.results(study_id)
 
     def _save_checkpoint(self, results):
         """

@@ -45,3 +45,6 @@ test = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+  "slow: durability/performance coverage",
+]
