@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hyperphoenixcv"
-version = "0.4.1"
+version = "0.4.2"
 description = "Hyper-parameter search with resumable SQLite studies"
 readme = "README.md"
 requires-python = ">=3.10"
