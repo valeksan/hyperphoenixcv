@@ -117,7 +117,8 @@ jobs:
         path = Path(tempfile.mkdtemp()) / "study.sqlite"
         kwargs = dict(
             estimator=LogisticRegression(max_iter=200),
-            param_grid={"C": [0.1]},
+            search_space={"C": [0.1]},
+            strategy="grid",
             scoring="accuracy",
             cv=2,
             storage_path=path,
