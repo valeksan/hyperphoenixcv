@@ -35,10 +35,10 @@ them. Default logs omit datasets, parameter values, and tracebacks.
 
 ## 🚀 Installation
 
-Install from PyPI:
+Install current release from TestPyPI. Keep PyPI as extra index for dependencies:
 
 ```bash
-pip install hyperphoenixcv
+pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple hyperphoenixcv
 ```
 
 Or install the latest development version from source:
@@ -162,7 +162,7 @@ hp = HyperPhoenixCV(
 Install optional backend first:
 
 ```bash
-pip install "hyperphoenixcv[optuna]"
+pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple "hyperphoenixcv[optuna]"
 ```
 
 ```python
