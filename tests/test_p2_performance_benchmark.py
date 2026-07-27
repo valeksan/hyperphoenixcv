@@ -28,6 +28,19 @@ def test_resume_latency_skips_terminal_trials():
     assert result["resume_seconds"] >= 0
 
 
+def test_projection_benchmark_does_not_retain_100k_results():
+    result = benchmark.measure_projection_bound()
+    assert result == {"retained_rows": 0.0, "offered_rows": 100_000.0}
+
+
+def test_profiled_components_measure_hash_projection_and_transport():
+    result = benchmark.measure_profiled_components()
+    assert result["param_key_100k_seconds"] >= 0
+    assert result["projection_100k_seconds"] >= 0
+    assert result["joblib_transport_8mib_seconds"] >= 0
+    assert result["projection_retained_rows"] == 0
+
+
 def test_regression_comparison_uses_median_and_threshold():
     values = {key: {"median": 1.0, "p95": 1.0} for key in benchmark.REGRESSION_METRICS}
     baseline = {"workloads": {name: values for name in benchmark.WORKLOADS}}
