@@ -3,15 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol
+from typing import Any, Callable
 
-
-class StudyStore(Protocol):
-    """Operations used by ``StudyEngine``."""
-
-    def study_state(self, study_id: str) -> dict[str, Any]: ...
-    def update_study_state(self, study_id: str, state: dict[str, Any]) -> None: ...
-    def commit_trial(self, study_id: str, params: dict[str, Any], result: dict[str, Any]) -> bool: ...
+from .storage.protocols import StudyStore
 
 
 @dataclass(frozen=True)
