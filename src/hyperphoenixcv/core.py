@@ -28,6 +28,7 @@ from .storage import SQLiteStudyStore
 from .study_engine import StudyEngine, StudySpec
 from .scheduler import SchedulerSpec, TrialScheduler
 from .events import EventPublisher, ExportFailed, RefitFailed, StudyCallback, TrialCompleted, TrialFailed, TrialPruned, TrialCancelled
+from .audit import TrialHistory
 
 
 logger = logging.getLogger(__name__)
@@ -127,6 +128,7 @@ class HyperPhoenixCV(BaseEstimator):
         n_trials: int | None = None,
         optuna_warmup_trials: int = 10,
         optuna_directions: Mapping[str, str] | None = None,
+        metric_directions: Mapping[str, str] | None = None,
         intermediate_evaluator=None,
         trial_timeout: float | None = None,
         cancel_callback=None,
@@ -215,6 +217,7 @@ class HyperPhoenixCV(BaseEstimator):
         self.n_trials = n_trials
         self.optuna_warmup_trials = optuna_warmup_trials
         self.optuna_directions = optuna_directions
+        self.metric_directions = metric_directions
         self.intermediate_evaluator = intermediate_evaluator
         self.trial_timeout = trial_timeout
         self.cancel_callback = cancel_callback
@@ -251,6 +254,7 @@ class HyperPhoenixCV(BaseEstimator):
         self.result_manager = ResultManager(
             scoring=self._scoring,
             results_csv=self.results_csv,
+            metric_directions=self._metric_directions(),
         )
         self.cv_executor = SklearnCVEvaluator(
             cv=self.cv,
@@ -272,6 +276,17 @@ class HyperPhoenixCV(BaseEstimator):
     def _is_multi_objective(self) -> bool:
         return self.strategy == "optuna" and self.optuna_directions is not None and len(self.optuna_directions) > 1
 
+    def _metric_directions(self) -> dict[str, str]:
+        """Ranking direction for sklearn projection; default mirrors sklearn scorers."""
+        directions = dict(self.metric_directions or {})
+        if self.optuna_directions is not None:
+            directions.update(self.optuna_directions)
+        invalid = {name: direction for name, direction in directions.items()
+                   if name not in self._scoring or direction not in {"maximize", "minimize"}}
+        if invalid:
+            raise ValueError("metric_directions keys must be scoring metrics and values maximize/minimize")
+        return {metric: directions.get(metric, "maximize") for metric in self._scoring}
+
     def _validate_refit(self) -> None:
         """Validate supported sklearn refit forms before creating a study."""
         metrics = self._scoring
@@ -292,6 +307,7 @@ class HyperPhoenixCV(BaseEstimator):
         raise ValueError("refit must be bool, scorer name, or callable")
 
     def _validate_strategy(self) -> None:
+        self._metric_directions()
         if self.optuna_directions is not None:
             if self.strategy != "optuna":
                 raise ValueError("optuna_directions requires strategy='optuna'")
@@ -607,16 +623,22 @@ class HyperPhoenixCV(BaseEstimator):
 
         if callable(self.refit):
             best_index = self.refit(self.cv_results_)
-            if not isinstance(best_index, int) or not 0 <= best_index < len(valid_results):
+            if not isinstance(best_index, (int, np.integer)) or not 0 <= best_index < len(self.result_manager.results):
                 raise ValueError("refit callable must return a valid cv_results_ index")
-            best_result = valid_results[best_index]
-            self.best_index_ = best_index
+            best_result = self.result_manager.results[int(best_index)]
+            if best_result.get("trial_state", "completed") != "completed" or "error" in best_result:
+                raise ValueError("refit callable must select a completed cv_results_ row")
+            self.best_index_ = int(best_index)
             scoring_key = None
         else:
             metric = self.refit if isinstance(self.refit, str) else self._scoring[0]
             scoring_key = f'mean_test_{metric}'
-            best_result = max(valid_results, key=lambda x: x.get(scoring_key, float('-inf')))
-            self.best_index_ = valid_results.index(best_result)
+            direction = self._metric_directions()[metric]
+            sentinel = float("-inf") if direction == "maximize" else float("inf")
+            best_result = (
+                max if direction == "maximize" else min
+            )(valid_results, key=lambda x: x.get(scoring_key, sentinel))
+            self.best_index_ = self.result_manager.results.index(best_result)
         self.best_params_ = best_result['params']
         if scoring_key is not None:
             self.best_score_ = best_result.get(scoring_key, 0.0)
@@ -722,6 +744,19 @@ class HyperPhoenixCV(BaseEstimator):
         pd.DataFrame: Top‑N results.
         """
         return self.result_manager.get_top_results(n)
+
+    @property
+    def trial_history_(self) -> TrialHistory:
+        """Read-only durable audit view. Use page()/iter_records() for large studies."""
+        if not hasattr(self, "study_id"):
+            raise NotFittedError("HyperPhoenixCV has no opened study. Call fit() first.")
+        return TrialHistory(self._storage_path(), self.study_id)
+
+    def load_trial_history(self) -> TrialHistory:
+        """Open read-only audit view for existing matching SQLite study."""
+        with SQLiteStudyStore(self._storage_path()) as store:
+            study_id = store.open_study(self._identity_for_loading(), resume="must")
+        return TrialHistory(self._storage_path(), study_id)
 
     def _check_refitted(self):
         if not hasattr(self, "best_estimator_") or self.best_estimator_ is None:

@@ -5,9 +5,10 @@ Result manager for storing, sorting, and exporting hyperparameter search results
 import pandas as pd
 import numpy as np
 import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Mapping
 
 from .study_identity import param_key
+from .audit import _atomic_write
 
 
 class ResultManager:
@@ -19,9 +20,16 @@ class ResultManager:
         self,
         scoring: List[str],
         results_csv: str = "hyperphoenix_results.csv",
+        metric_directions: Mapping[str, str] | None = None,
     ):
         self.scoring = scoring
         self.results_csv = results_csv
+        self.metric_directions = dict(metric_directions or {})
+        unknown = set(self.metric_directions) - set(scoring)
+        invalid = {name: direction for name, direction in self.metric_directions.items()
+                   if direction not in {"maximize", "minimize"}}
+        if unknown or invalid:
+            raise ValueError("metric_directions keys must be scoring metrics and values maximize/minimize")
         self.results = []
         self._param_keys = set()
 
@@ -73,7 +81,7 @@ class ResultManager:
             return pd.DataFrame()
 
         # Filter out error results
-        valid = [r for r in self.results if 'error' not in r]
+        valid = [r for r in self.results if r.get("trial_state", "completed") == "completed" and 'error' not in r]
         if not valid:
             return pd.DataFrame()
 
@@ -94,7 +102,7 @@ class ResultManager:
         if self.scoring and f'mean_test_{self.scoring[0]}' in df.columns:
             df = df.sort_values(
                 f'mean_test_{self.scoring[0]}',
-                ascending=False,
+                ascending=self.metric_directions.get(self.scoring[0], "maximize") == "minimize",
             )
         return df.head(n)
 
@@ -107,7 +115,9 @@ class ResultManager:
         """
         csv_path = path or self.results_csv
         df = self.get_top_results(n=len(self.results))  # get all valid results
-        df.to_csv(csv_path, index=False)
+        def write(handle):
+            handle.write(df.to_csv(index=False).encode("utf-8"))
+        _atomic_write(csv_path, write)
 
     def format_cv_results(self) -> Dict[str, Any]:
         """
@@ -143,17 +153,21 @@ class ResultManager:
                     if fold < len(result.get(f'scores_{metric}', [])) else np.nan
                     for result in results
                 ]
-            cv_results[f'rank_test_{metric}'] = self._rank_descending(means)
+            cv_results[f'rank_test_{metric}'] = self._rank(
+                means, self.metric_directions.get(metric, "maximize"),
+            )
         return cv_results
 
     @staticmethod
-    def _rank_descending(values: list[float]) -> list[int]:
+    def _rank(values: list[float], direction: str) -> list[int]:
         """Sklearn-like ordinal ranks; NaN receives worst rank."""
         finite = [(index, value) for index, value in enumerate(values) if not pd.isna(value)]
         ranks = [len(values) + 1] * len(values)
         last_value = None
         rank = 0
-        for position, (index, value) in enumerate(sorted(finite, key=lambda item: item[1], reverse=True), 1):
+        for position, (index, value) in enumerate(sorted(
+            finite, key=lambda item: item[1], reverse=direction == "maximize",
+        ), 1):
             if last_value is None or value != last_value:
                 rank = position
                 last_value = value

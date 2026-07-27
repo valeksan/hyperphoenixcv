@@ -299,19 +299,59 @@ class SQLiteStudyStore:
                 raise StudyStoreError(f"Unknown study: {study_id}")
 
     def results(self, study_id: str) -> list[dict[str, Any]]:
-        rows = self.connection.execute(
-            "SELECT result_json, state, objective_values_json, diagnostics_json "
-            "FROM trials WHERE study_id = ? ORDER BY sequence", (study_id,)
-        ).fetchall()
-        results = []
-        for row in rows:
+        return [record["result"] for record in self.iter_trials(study_id)]
+
+    def trial_count(self, study_id: str, states: set[str] | None = None) -> int:
+        """Count terminal trials without materializing their result JSON."""
+        sql, params = "SELECT COUNT(*) FROM trials WHERE study_id = ?", [study_id]
+        if states:
+            valid = sorted(states)
+            sql += " AND state IN (" + ", ".join("?" for _ in valid) + ")"
+            params.extend(valid)
+        return int(self.connection.execute(sql, params).fetchone()[0])
+
+    def iter_trials(
+        self, study_id: str, *, states: set[str] | None = None,
+        offset: int = 0, limit: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Stream full terminal audit records in durable sequence order."""
+        if offset < 0 or limit is not None and limit < 0:
+            raise ValueError("offset and limit must be >= 0")
+        sql = (
+            "SELECT trial_id, sequence, state, param_key, params_json, result_json, "
+            "objective_values_json, diagnostics_json, exception_type, exception_message, "
+            "created_at, updated_at FROM trials WHERE study_id = ?"
+        )
+        params: list[Any] = [study_id]
+        if states:
+            valid = sorted(states)
+            sql += " AND state IN (" + ", ".join("?" for _ in valid) + ")"
+            params.extend(valid)
+        sql += " ORDER BY sequence LIMIT ? OFFSET ?"
+        params.extend([-1 if limit is None else limit, offset])
+        for row in self.connection.execute(sql, params):
             result = _restore(json.loads(row["result_json"]))
-            if row["objective_values_json"] is not None:
-                result.setdefault("objective_values", _restore(json.loads(row["objective_values_json"])))
-            if row["diagnostics_json"] is not None:
-                result.setdefault("trial_diagnostics", _restore(json.loads(row["diagnostics_json"])))
-            results.append(result)
-        return results
+            objectives = (
+                _restore(json.loads(row["objective_values_json"]))
+                if row["objective_values_json"] is not None else None
+            )
+            diagnostics = (
+                _restore(json.loads(row["diagnostics_json"]))
+                if row["diagnostics_json"] is not None else None
+            )
+            if objectives is not None:
+                result.setdefault("objective_values", objectives)
+            if diagnostics is not None:
+                result.setdefault("trial_diagnostics", diagnostics)
+            yield {
+                "trial_id": row["trial_id"], "sequence": row["sequence"],
+                "state": row["state"], "param_key": row["param_key"],
+                "params": _restore(json.loads(row["params_json"])), "result": result,
+                "objective_values": objectives, "diagnostics": diagnostics,
+                "exception_type": row["exception_type"],
+                "exception_message": row["exception_message"],
+                "created_at": row["created_at"], "updated_at": row["updated_at"],
+            }
 
     def commit_trial(self, study_id: str, params: dict[str, Any], result: dict[str, Any]) -> bool:
         """Atomically store terminal trial. False means same param already committed."""
