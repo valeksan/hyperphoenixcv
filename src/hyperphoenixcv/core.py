@@ -27,8 +27,9 @@ from .study_identity import StudyIdentity
 from .storage import SQLiteStudyStore
 from .study_engine import StudyEngine, StudySpec
 from .scheduler import SchedulerSpec, TrialScheduler
-from .events import EventPublisher, ExportFailed, RefitFailed, StudyCallback, TrialCompleted, TrialFailed, TrialPruned, TrialCancelled
+from .events import EventPublisher, ExportFailed, RefitFailed, StudyCallback, TrialCompleted, TrialFailed, TrialPruned, TrialCancelled, GPUDeviceAssigned, GPUOutOfMemory
 from .audit import TrialHistory
+from .compute import ComputeSpec, preflight_gpu
 
 
 logger = logging.getLogger(__name__)
@@ -131,6 +132,9 @@ class HyperPhoenixCV(BaseEstimator):
         joblib_batch_size: int | str = "auto",
         callbacks: list[StudyCallback] | tuple[StudyCallback, ...] | None = None,
         max_cv_results: int | None = 10_000,
+        compute: str = "cpu",
+        gpu_devices: tuple[int | str, ...] = (0,),
+        gpu_slots_per_device: int = 1,
     ):
         """
         Initializes HyperPhoenixCV.
@@ -206,6 +210,9 @@ class HyperPhoenixCV(BaseEstimator):
         self.joblib_batch_size = joblib_batch_size
         self.callbacks = callbacks
         self.max_cv_results = max_cv_results
+        self.compute = compute
+        self.gpu_devices = gpu_devices
+        self.gpu_slots_per_device = gpu_slots_per_device
 
     @property
     def _scoring(self):
@@ -246,6 +253,7 @@ class HyperPhoenixCV(BaseEstimator):
         for name in (
             "search_strategy", "study_store", "study_id", "study_engine", "trial_scheduler", "result_manager", "cv_executor",
             "_study_identity", "best_params_", "best_score_", "best_estimator_", "cv_results_", "best_index_", "cv_results_truncated_",
+            "compute_spec", "gpu_assignment_", "compute_diagnostics_",
         ):
             self.__dict__.pop(name, None)
 
@@ -338,6 +346,24 @@ class HyperPhoenixCV(BaseEstimator):
         if self.callbacks is not None and (not isinstance(self.callbacks, (list, tuple)) or not all(callable(item) for item in self.callbacks)):
             raise TypeError("callbacks must be a list or tuple of callables, or None")
 
+    def _validate_compute(self) -> None:
+        """Validate declaration only. Device discovery remains fit-time preflight."""
+        self.compute_spec = ComputeSpec(
+            compute=self.compute,
+            gpu_devices=self.gpu_devices,
+            gpu_slots_per_device=self.gpu_slots_per_device,
+        )
+        self.compute_spec.validate(n_jobs=self.n_jobs, parallelism=self.parallelism)
+
+    def _preflight_compute(self) -> None:
+        """Hardware check before identity/store creation; never mutates CUDA env."""
+        self.gpu_assignment_ = preflight_gpu(self.compute_spec)
+        self.compute_diagnostics_ = {
+            "compute": self.compute_spec.compute,
+            "gpu_assignment": self.gpu_assignment_.as_dict() if self.gpu_assignment_ else None,
+            "estimator_gpu_verification": "not_attempted",
+        }
+
     def _progress_callback(self, event) -> None:
         """Legacy verbose output through logging; omit params/data/tracebacks."""
         if isinstance(event, (TrialCompleted, TrialFailed, TrialPruned, TrialCancelled)):
@@ -382,6 +408,27 @@ class HyperPhoenixCV(BaseEstimator):
             for params in proposals
         ]
         return self.trial_scheduler.evaluate(self.cv_executor, kwargs)
+
+    def _attach_compute_diagnostics(self, results: list[dict]) -> list[dict]:
+        if self.gpu_assignment_ is None:
+            return results
+        assignment = self.gpu_assignment_.as_dict()
+        for result in results:
+            diagnostics = result.setdefault("trial_diagnostics", {})
+            if isinstance(diagnostics, dict):
+                diagnostics.setdefault("gpu_assignment", assignment)
+                diagnostics.setdefault("estimator_gpu_verification", "not_attempted")
+        return results
+
+    def _on_trial(self, trial_index: int, params: dict, result: dict) -> None:
+        """Emit typed G1 OOM signal without raw estimator traceback."""
+        if self.gpu_assignment_ is None or "error" not in result:
+            return
+        error = str(result["error"])
+        if "out of memory" in error.lower() or "cuda oom" in error.lower():
+            self.event_publisher.emit(GPUOutOfMemory(
+                self.study_id, trial_index, "GPU out of memory detected during trial"
+            ))
 
     def _format_metric_string(self, result: dict) -> str:
         """
@@ -448,6 +495,10 @@ class HyperPhoenixCV(BaseEstimator):
 
     def _strategy_identity_config(self) -> dict[str, object]:
         """Choices that alter proposal order or stopping semantics."""
+        compute_spec = getattr(self, "compute_spec", ComputeSpec(
+            compute=self.compute, gpu_devices=self.gpu_devices,
+            gpu_slots_per_device=self.gpu_slots_per_device,
+        ))
         return {
             "strategy": self.strategy,
             "n_trials": self.n_trials,
@@ -458,6 +509,7 @@ class HyperPhoenixCV(BaseEstimator):
             "trial_timeout": self.trial_timeout,
             "memmap_max_nbytes": self.memmap_max_nbytes,
             "joblib_batch_size": self.joblib_batch_size,
+            "compute": compute_spec.identity_config(),
         }
 
     def _identity_search_space(self):
@@ -496,6 +548,8 @@ class HyperPhoenixCV(BaseEstimator):
         self._validate_result_limit()
         self._validate_strategy()
         self._validate_scheduler()
+        self._validate_compute()
+        self._preflight_compute()
         if self.dataset_id is None:
             warnings.warn(
                 "dataset_id=None disables dataset-level checkpoint identity; pass a stable dataset_id for safe resume.",
@@ -529,6 +583,10 @@ class HyperPhoenixCV(BaseEstimator):
                 "joblib_batch_size": self.joblib_batch_size,
                 "attempts": existing_scheduler.get("attempts", self.study_store.trial_count(self.study_id)),
                 "cancellation_reason": existing_scheduler.get("cancellation_reason"),
+                **({
+                    "compute": self.compute_spec.identity_config(),
+                    "gpu_assignment": self.gpu_assignment_.as_dict(),
+                } if self.gpu_assignment_ else {}),
             }
         })
         # ``ParameterSampler`` must replay exactly after a process crash.  A
@@ -570,10 +628,18 @@ class HyperPhoenixCV(BaseEstimator):
         if self.verbose:
             callbacks = (*callbacks, self._progress_callback)
         self.event_publisher = EventPublisher(callbacks)
+        if self.gpu_assignment_ is not None:
+            self.event_publisher.emit(GPUDeviceAssigned(
+                self.study_id, self.gpu_assignment_.device_index,
+                self.gpu_assignment_.device_uuid, self.gpu_assignment_.device_name,
+            ))
         self.study_engine = StudyEngine(
             spec=spec, store=self.study_store, study_id=self.study_id,
             strategy=self.search_strategy, result_manager=self.result_manager,
-            evaluate_batch=lambda proposals: self._evaluate_batch(proposals, X, y, groups, fit_params),
+            evaluate_batch=lambda proposals: self._attach_compute_diagnostics(
+                self._evaluate_batch(proposals, X, y, groups, fit_params)
+            ),
+            on_trial=self._on_trial,
             event_publisher=self.event_publisher,
         )
         self.study_engine.run()
@@ -609,6 +675,8 @@ class HyperPhoenixCV(BaseEstimator):
         if self.refit and hasattr(self, "best_params_") and self.best_params_:
             try:
                 self.best_estimator_ = clone(self.estimator).set_params(**self.best_params_)
+                # G1 uses one caller process for trials and refit; no device
+                # env or estimator parameters are rewritten between phases.
                 self.best_estimator_.fit(X, y, **(fit_params or {}))
             except Exception as exc:
                 self.event_publisher.emit(RefitFailed(self.study_id, type(exc).__name__, str(exc)))

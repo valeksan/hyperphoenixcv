@@ -360,6 +360,13 @@ hp.fit(X, y, groups=groups)
 - `cv`: int, сплиттер кросс‑валидации или итерируемый объект (по умолчанию=5).
 - `n_jobs`: количество параллельных jobs (по умолчанию=1).
 - `parallelism`: `"trials"` (по умолчанию) или `"folds"`; `n_jobs` работает только по одной оси.
+- `compute`: `"cpu"` (по умолчанию) или G1 `"gpu"`. GPU mode проверяет один
+  локальный NVIDIA device при `fit()` через `nvidia-smi`; CUDA не устанавливается,
+  параметры estimator не меняются.
+- `gpu_devices`: один физический NVIDIA index или UUID в G1 (default `(0,)`
+  при `compute="gpu"`). Device ID — runtime diagnostics, не resume identity.
+- `gpu_slots_per_device`: G1 требует `1`. G1 требует последовательный
+  `n_jobs=1`; parallel GPU trials/folds — работа G2.
 - `inner_max_num_threads`: опциональный лимит native threads для process-parallel trials.
 - `trial_timeout`: optional timeout одного trial в секундах. Требует
   `parallelism="trials"` и `n_jobs >= 2`; timeout trial сохраняется как failed.
@@ -380,6 +387,16 @@ hp.fit(X, y, groups=groups)
 - `results_csv`: путь к CSV‑файлу для сохранения результатов
   (по умолчанию=`"hyperphoenix_results.csv"`).
 - `verbose`: включить progress logging (по умолчанию=True).
+
+### G1 GPU
+
+GPU mode = resource validation и diagnostics, не automatic acceleration.
+Установите/настройте GPU-capable estimator сами, например XGBoost с
+`device="cuda"`. HyperPhoenixCV сохраняет device parameters estimator и
+последовательно запускает trial evaluation/refit в одном process context.
+Отсутствующий или невыбранный NVIDIA device падает до создания SQLite study.
+GPU capability неизвестного estimator помечается как unverified. CPU-only
+estimator не становится GPU-capable от `compute="gpu"`.
 
 **Атрибуты после обучения**:
 

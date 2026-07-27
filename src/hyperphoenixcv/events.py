@@ -81,10 +81,31 @@ class RefitFailed(StudyEvent):
     error: str
 
 
+@dataclass(frozen=True)
+class GPUDeviceAssigned(StudyEvent):
+    """G1 runtime assignment; estimator configuration remains caller-owned."""
+
+    device_index: int
+    device_uuid: str
+    device_name: str
+
+
+@dataclass(frozen=True)
+class GPUResourceFailure(StudyEvent):
+    error_type: str
+    error: str
+
+
+@dataclass(frozen=True)
+class GPUOutOfMemory(StudyEvent):
+    trial_index: int
+    error: str
+
+
 AnyStudyEvent: TypeAlias = (
     StudyStarted | StudyResumed | TrialStarted | TrialCompleted | TrialFailed
     | TrialPruned | TrialCancelled | StudyStopped | StudyCompleted
-    | ExportFailed | RefitFailed
+    | ExportFailed | RefitFailed | GPUDeviceAssigned | GPUResourceFailure | GPUOutOfMemory
 )
 StudyCallback: TypeAlias = Callable[[AnyStudyEvent], None]
 

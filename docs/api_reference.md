@@ -17,6 +17,7 @@ HyperPhoenixCV(
     metric_directions=None, intermediate_evaluator=None, trial_timeout=None,
     cancel_callback=None, memmap_max_nbytes="1M", memmap_temp_folder=None,
     joblib_batch_size="auto", callbacks=None, max_cv_results=10_000,
+    compute="cpu", gpu_devices=(0,), gpu_slots_per_device=1,
 )
 ```
 
@@ -33,6 +34,10 @@ grid/random, Optuna distributions or callable for Optuna. `strategy` is
 `intermediate_evaluator` enables cooperative Optuna pruning only; see
 [pruning](pruning.md). `callbacks` receives runtime events; see
 [audit and events](audit_and_events.md).
+`compute="gpu"` is G1 single-NVIDIA-device validation/diagnostics. It requires
+one `gpu_devices` entry, `gpu_slots_per_device=1`, and `n_jobs=1`; device
+preflight occurs before SQLite mutation. Estimator GPU configuration remains
+caller-owned.
 
 ### Methods
 
@@ -68,4 +73,6 @@ Allowed terminal states: `completed`, `failed`, `pruned`, `cancelled`.
 `StudyStarted`, `StudyResumed`, `TrialStarted`, `TrialCompleted`,
 `TrialFailed`, `TrialPruned`, `TrialCancelled`, `StudyStopped`,
 `StudyCompleted`, `ExportFailed`, and `RefitFailed` are public event classes.
+`GPUDeviceAssigned`, `GPUResourceFailure`, and `GPUOutOfMemory` are GPU
+diagnostic event classes.
 Each has `study_id`; trial events also include trial index and terminal context.
