@@ -159,6 +159,24 @@ hp = HyperPhoenixCV(
 )
 ```
 
+`results_csv` is a flat convenience projection: only completed rows and flat
+score/parameter columns survive. SQLite remains source of truth. For every
+terminal state, diagnostics, objectives, and exceptions, use paginated audit
+history and its atomic exports:
+
+```python
+history = hp.trial_history_
+history.export_json("audit.json")       # lossless tagged JSON
+history.export_csv("audit.csv")         # flat convenience export
+history.export_parquet("audit.parquet") # requires hyperphoenixcv[parquet]
+```
+
+Use `history.page(offset=0, limit=100)` or `history.iter_records(page_size=1000)`
+for large studies. `metric_directions={"loss": "minimize"}` controls ranking
+and non-Optuna scalar refit; unspecified sklearn scores default to maximize.
+`cv_results_` materializes at most `max_cv_results=10_000` trials by default;
+set it to `None` only when memory budget permits full sklearn projection.
+
 Install optional backend first:
 
 ```bash
@@ -334,6 +352,8 @@ Main class for hyperparameter search.
 - `storage_path`: explicit local SQLite store path; overrides `checkpoint_path` derivation.
 - `dataset_id`: stable dataset identifier. Required for strong resume identity; `None` emits a warning.
 - `resume`: `"auto"` (default), `"must"`, or `"never"`.
+- `max_cv_results`: max trials materialized in `cv_results_` (default=10,000);
+  `None` opts into unbounded projection.
 - `clear_checkpoint=True`: deprecated; call `clear_checkpoint_file()` before
   `fit()` instead. It will be removed in 0.6.
 - `results_csv`: path to CSV file for saving results (default=None).
@@ -345,6 +365,7 @@ Main class for hyperparameter search.
 - `best_score_`: best cross‑validation score.
 - `best_index_`: index of the best candidate in the results.
 - `cv_results_`: dict of detailed results (like `GridSearchCV`).
+- `trial_history_`: read-only, SQLite-backed terminal audit projection.
 - `top_results_`: DataFrame with top‑N results.
 
 **Methods**:
@@ -354,6 +375,7 @@ Main class for hyperparameter search.
 - `load_results_from_checkpoint(n=10)`: read top results from SQLite after interruption.
 - `import_legacy_checkpoint(path, trusted=True)`: one-time trusted legacy pickle migration.
 - `clear_checkpoint_file()`: delete SQLite store explicitly.
+- `load_trial_history()`: open audit history for an existing matching study.
 
 SQLite storage is supported only on a local filesystem. Windows locking and
 durability behavior is not CI-validated in P0, so Windows is not yet a

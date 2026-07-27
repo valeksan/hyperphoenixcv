@@ -75,8 +75,9 @@ class OptunaSearchStrategy(SearchStrategy):
 
     def restore(self, results):
         self._known_param_keys, self._trials_by_key = set(), {}
-        self._terminal_count, self.study = len(results), self._new_study()
+        self._terminal_count, self.study = 0, self._new_study()
         for result in results:
+            self._terminal_count += 1
             params = result.get("params")
             if params is None:
                 continue

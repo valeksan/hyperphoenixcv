@@ -1,4 +1,5 @@
 from .core import HyperPhoenixCV
+from .audit import TrialHistory
 from .events import (
     ExportFailed, RefitFailed, StudyCompleted, StudyResumed, StudyStarted,
     StudyStopped, TrialCancelled, TrialCompleted, TrialFailed, TrialPruned,
@@ -8,6 +9,6 @@ from .events import (
 __all__ = [
     'HyperPhoenixCV', 'StudyStarted', 'StudyResumed', 'TrialStarted',
     'TrialCompleted', 'TrialFailed', 'TrialPruned', 'TrialCancelled',
-    'StudyStopped', 'StudyCompleted', 'ExportFailed', 'RefitFailed',
+    'StudyStopped', 'StudyCompleted', 'ExportFailed', 'RefitFailed', 'TrialHistory',
 ]
 __version__ = '0.4.2'

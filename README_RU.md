@@ -149,6 +149,24 @@ hp = HyperPhoenixCV(
 )
 ```
 
+`results_csv` — flat convenience projection: сохраняет только completed rows
+и flat score/parameter columns. SQLite остаётся source of truth. Для всех
+terminal states, diagnostics, objectives, exceptions используйте paginated
+audit history и atomic export:
+
+```python
+history = hp.trial_history_
+history.export_json("audit.json")       # lossless tagged JSON
+history.export_csv("audit.csv")         # flat convenience export
+history.export_parquet("audit.parquet") # требует hyperphoenixcv[parquet]
+```
+
+Для больших study: `history.page(offset=0, limit=100)` или
+`history.iter_records(page_size=1000)`. `metric_directions={"loss": "minimize"}`
+задаёт ranking/non-Optuna scalar refit; default sklearn scores — maximize.
+`cv_results_` по default materializes максимум `max_cv_results=10_000` trials;
+`None` задавайте только при достаточном memory budget для полной sklearn projection.
+
 Установите optional backend:
 
 ```bash
@@ -313,6 +331,8 @@ hp.fit(X, y, groups=groups)
 - `storage_path`: явный путь к локальному SQLite store; заменяет вывод из `checkpoint_path`.
 - `dataset_id`: стабильный идентификатор датасета. Нужен для сильной identity resume; `None` выдаёт warning.
 - `resume`: `"auto"` (по умолчанию), `"must"` или `"never"`.
+- `max_cv_results`: max trials в materialized `cv_results_` (по умолчанию=10,000);
+  `None` включает unbounded projection.
 - `clear_checkpoint=True`: deprecated; перед `fit()` вызывайте
   `clear_checkpoint_file()`. Параметр будет удалён в 0.6.
 - `results_csv`: путь к CSV‑файлу для сохранения результатов (по умолчанию=None).
@@ -324,6 +344,7 @@ hp.fit(X, y, groups=groups)
 - `best_score_`: лучшее значение кросс‑валидационной метрики.
 - `best_index_`: индекс лучшего кандидата в результатах.
 - `cv_results_`: dict с детальными результатами (как в `GridSearchCV`).
+- `trial_history_`: read-only SQLite-backed terminal audit projection.
 - `top_results_`: DataFrame с топ‑N результатами.
 
 **Методы**:
@@ -333,6 +354,7 @@ hp.fit(X, y, groups=groups)
 - `load_results_from_checkpoint(n=10)`: прочитать top results из SQLite после прерывания.
 - `import_legacy_checkpoint(path, trusted=True)`: однократная trusted migration legacy pickle.
 - `clear_checkpoint_file()`: явно удалить SQLite store.
+- `load_trial_history()`: открыть audit history matching existing study.
 
 SQLite store поддержан только на локальной файловой системе. Windows locking и
 durability не проверены в CI для P0, поэтому Windows пока не является
