@@ -303,9 +303,10 @@ class OptunaSearchStrategy(SearchStrategy):
 
 # Compatibility re-export; implementation lives in ``search_optuna``.
 from .search_optuna import OptunaSearchStrategy
+from .search_surrogate import ExperimentalSurrogateRankingStrategy
 
 
-class ExperimentalSurrogateRankingStrategy(SearchStrategy):
+class _LegacyExperimentalSurrogateRankingStrategy(SearchStrategy):
     """
     Experimental surrogate-ranking strategy. This is not Bayesian optimization:
     it has no acquisition function or sequential Bayesian sampler.
