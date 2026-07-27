@@ -14,8 +14,8 @@ HyperPhoenixCV — это умная библиотека для подбора 
 ## ✨ Возможности
 
 - **🔄 Возобновляемый поиск** — Продолжайте с последнего чекпоинта после любого прерывания.
-- **🎲 Режимы поиска** — Полный перебор или воспроизводимый случайный поиск.
-- **🎯 Несколько стратегий поиска** — Полный перебор или случайный поиск.
+- **🎲 Режимы поиска** — Полный перебор, воспроизводимый случайный поиск или адаптивный Optuna TPE.
+- **🎯 Поиск с обучением на trials** — Optuna использует завершённые испытания для выбора перспективных параметров.
 - **📊 Оценка по нескольким метрикам** — Одновременное использование нескольких метрик (F1, accuracy, precision и др.).
 - **💾 Транзакционное хранение** — Trials инкрементально сохраняются в локальный SQLite; CSV — только экспорт.
 - **🔌 Совместимость с Scikit‑learn** — Бесшовная интеграция с экосистемой scikit‑learn.
@@ -59,7 +59,7 @@ joblib 1.3, scikit-learn 1.4. Optuna 3.0+ — опциональная зави�
 | Возможность | `GridSearchCV` | `HyperPhoenixCV` |
 |-------------|----------------|------------------|
 | **Возобновляемость** | Начинает заново после прерывания | ✅ Продолжает с чекпоинта |
-| **Оптимизация** | Только полный перебор | ✅ Случайная или полная |
+| **Оптимизация** | Только полный перебор | ✅ Grid, random или адаптивный Optuna TPE |
 | **Мультиметричность** | Одна метрика за раз | ✅ Несколько метрик одновременно |
 | **Хранение результатов** | Требуется ручное сохранение | ✅ Транзакционный SQLite + экспорт CSV |
 | **Отслеживание прогресса** | Ограничено | ✅ Подробные логи и промежуточные результаты |
@@ -166,6 +166,13 @@ history.export_parquet("audit.parquet") # требует hyperphoenixcv[parquet]
 `cv_results_` по default materializes максимум `max_cv_results=10_000` trials;
 `None` задавайте только при достаточном memory budget для полной sklearn projection.
 
+#### Рекомендуемый метод: адаптивный Optuna TPE
+
+Используйте его, когда обучение модели дорого и полный перебор пространства
+непрактичен. Первые trials формируют seeded warmup, затем TPE обучается на
+завершённых результатах и предлагает более перспективные параметры. Study в
+SQLite можно возобновить после прерывания.
+
 Установите optional backend:
 
 ```bash
@@ -174,19 +181,38 @@ pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://
 
 ```python
 import optuna
+from sklearn.datasets import load_breast_cancer
+from sklearn.ensemble import HistGradientBoostingClassifier
+
+from hyperphoenixcv import HyperPhoenixCV
+
+X, y = load_breast_cancer(return_X_y=True)
 
 hp = HyperPhoenixCV(
-    estimator=model,
+    estimator=HistGradientBoostingClassifier(random_state=42),
     strategy="optuna",
     search_space={
-        "C": optuna.distributions.FloatDistribution(1e-4, 10, log=True),
-        "penalty": optuna.distributions.CategoricalDistribution(["l1", "l2"]),
+        "learning_rate": optuna.distributions.FloatDistribution(1e-3, 0.3, log=True),
+        "max_leaf_nodes": optuna.distributions.IntDistribution(8, 64),
+        "max_depth": optuna.distributions.IntDistribution(2, 12),
+        "min_samples_leaf": optuna.distributions.IntDistribution(5, 50),
+        "l2_regularization": optuna.distributions.FloatDistribution(1e-8, 10.0, log=True),
     },
     n_trials=30,
-    optuna_warmup_trials=10,
+    optuna_warmup_trials=8,
+    scoring="roc_auc",
+    cv=5,
     random_state=42,
+    storage_path="optuna_tpe.sqlite3",
+    dataset_id="breast-cancer-optuna-tpe-v1",
 )
+
+hp.fit(X, y)
+print("Лучшие параметры:", hp.best_params_)
+print("Лучший ROC AUC:", hp.best_score_)
 ```
+
+Полная запускаемая версия: [`examples/optuna_tpe_example.py`](examples/optuna_tpe_example.py).
 
 Optuna использует настоящий `ask`/`tell`; terminal trials восстанавливаются из
 SQLite. `n_trials` ограничивает trials, включая resume. Для conditional space

@@ -14,8 +14,8 @@ HyperPhoenixCV is a smart hyperparameter tuning library that, like the mythical 
 ## ✨ Features
 
 - **🔄 Resumable searches** – Continue from the last checkpoint after any interruption.
-- **🎲 Search modes** – Exhaustive grid or reproducible random sampling.
-- **🎯 Multiple search strategies** – Exhaustive grid search or random search.
+- **🎲 Search modes** – Exhaustive grid, reproducible random, or adaptive Optuna TPE.
+- **🎯 Model-guided optimization** – Optuna learns from completed trials to propose promising parameters.
 - **📊 Multi‑metric evaluation** – Score using multiple metrics (F1, accuracy, precision, etc.) simultaneously.
 - **💾 Transactional persistence** – Trials commit incrementally to local SQLite; CSV is an export.
 - **🔌 Scikit‑learn compatible** – Seamlessly integrates with the scikit‑learn ecosystem.
@@ -69,7 +69,7 @@ The "CV" in the name highlights the library's focus on cross‑validation and ma
 | Feature | `GridSearchCV` | `HyperPhoenixCV` |
 |---------|----------------|------------------|
 | **Resumability** | Starts over after interruption | ✅ Continues from checkpoint |
-| **Optimization** | Exhaustive search only | ✅ Random or exhaustive |
+| **Optimization** | Exhaustive search only | ✅ Grid, random, or adaptive Optuna TPE |
 | **Multi‑metric** | Single metric at a time | ✅ Multiple metrics simultaneously |
 | **Persistence** | Manual saving required | ✅ Transactional SQLite + CSV export |
 | **Progress tracking** | Limited | ✅ Verbose logs & intermediate results |
@@ -176,7 +176,14 @@ and non-Optuna scalar refit; unspecified sklearn scores default to maximize.
 `cv_results_` materializes at most `max_cv_results=10_000` trials by default;
 set it to `None` only when memory budget permits full sklearn projection.
 
-Install optional backend first:
+#### Recommended: adaptive Optuna TPE
+
+Use this when model evaluation is expensive and you cannot afford to exhaust
+the whole space. The first trials are seeded warmup; afterwards TPE learns from
+completed trials and proposes increasingly promising parameters. The SQLite
+study remains resumable.
+
+Install the optional backend first:
 
 ```bash
 pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple "hyperphoenixcv[optuna]"
@@ -184,19 +191,38 @@ pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://
 
 ```python
 import optuna
+from sklearn.datasets import load_breast_cancer
+from sklearn.ensemble import HistGradientBoostingClassifier
+
+from hyperphoenixcv import HyperPhoenixCV
+
+X, y = load_breast_cancer(return_X_y=True)
 
 hp = HyperPhoenixCV(
-    estimator=model,
+    estimator=HistGradientBoostingClassifier(random_state=42),
     strategy="optuna",
     search_space={
-        "C": optuna.distributions.FloatDistribution(1e-4, 10, log=True),
-        "penalty": optuna.distributions.CategoricalDistribution(["l1", "l2"]),
+        "learning_rate": optuna.distributions.FloatDistribution(1e-3, 0.3, log=True),
+        "max_leaf_nodes": optuna.distributions.IntDistribution(8, 64),
+        "max_depth": optuna.distributions.IntDistribution(2, 12),
+        "min_samples_leaf": optuna.distributions.IntDistribution(5, 50),
+        "l2_regularization": optuna.distributions.FloatDistribution(1e-8, 10.0, log=True),
     },
     n_trials=30,
-    optuna_warmup_trials=10,
+    optuna_warmup_trials=8,
+    scoring="roc_auc",
+    cv=5,
     random_state=42,
+    storage_path="optuna_tpe.sqlite3",
+    dataset_id="breast-cancer-optuna-tpe-v1",
 )
+
+hp.fit(X, y)
+print("Best parameters:", hp.best_params_)
+print("Best ROC AUC:", hp.best_score_)
 ```
+
+Full runnable version: [`examples/optuna_tpe_example.py`](examples/optuna_tpe_example.py).
 
 Optuna trials use real `ask`/`tell`; terminal results replay from SQLite on
 resume. `n_trials` caps terminal trials across resume. Conditional spaces need
