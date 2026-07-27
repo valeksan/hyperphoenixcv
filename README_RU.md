@@ -3,7 +3,7 @@
 ![CI](https://github.com/valeksan/hyperphoenixcv/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![PyPI](https://img.shields.io/pypi/v/hyperphoenixcv?v=0.4.2)
+[![TestPyPI](https://img.shields.io/pypi/v/hyperphoenixcv?label=TestPyPI&pypiBaseUrl=https%3A%2F%2Ftest.pypi.org)](https://test.pypi.org/project/hyperphoenixcv/)
 
 > *"Возрождайтесь из пепла прерванных экспериментов"*
 
