@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.2 — 2026-07-27
+
+### Changed
+
+- Extracted the local study engine, scheduler, storage contract, and concrete
+  search strategies while preserving public strategy imports and SQLite schema.
+- Declared the dependency/platform baseline in CI and project metadata.
+
+### Fixed
+
+- Raised the minimum Joblib version to 1.3 because the local scheduler uses
+  `parallel_config`.
+
 ## 0.4.1 — 2026-07-24
 
 ### Deprecated
