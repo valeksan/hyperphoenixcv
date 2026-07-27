@@ -383,6 +383,13 @@ Main class for hyperparameter search.
 - `cv`: int, cross‑validation splitter, or iterable (default=5).
 - `n_jobs`: number of parallel jobs (default=1).
 - `parallelism`: `"trials"` (default) or `"folds"`; exactly one axis uses `n_jobs`.
+- `compute`: `"cpu"` (default) or G1 `"gpu"`. GPU mode validates one local
+  NVIDIA device at `fit()` through `nvidia-smi`; it never installs CUDA or
+  changes estimator parameters.
+- `gpu_devices`: one physical NVIDIA index or UUID in G1 (default `(0,)` when
+  `compute="gpu"`). Device ID is runtime diagnostics, not resume identity.
+- `gpu_slots_per_device`: G1 requires `1`. G1 also requires sequential
+  `n_jobs=1`; parallel GPU trials/folds are G2 work.
 - `inner_max_num_threads`: optional native-thread cap for process-parallel trials.
 - `trial_timeout`: optional per-trial timeout in seconds. Requires
   `parallelism="trials"` and `n_jobs >= 2`; timed-out trials are stored failed.
@@ -403,6 +410,16 @@ Main class for hyperparameter search.
 - `results_csv`: path to CSV file for saving results
   (default=`"hyperphoenix_results.csv"`).
 - `verbose`: enable progress logging (default=True).
+
+### G1 GPU use
+
+GPU mode is resource validation and diagnostics, not automatic acceleration.
+Install/configure GPU-capable estimator yourself, e.g. XGBoost with
+`device="cuda"`. HyperPhoenixCV preserves estimator device parameters and runs
+trial evaluation plus refit sequentially in same process context. Missing or
+unselected NVIDIA device fails before SQLite study creation. Unknown estimator
+GPU capability is reported as unverified. CPU-only estimators do not gain GPU
+support from `compute="gpu"`.
 
 **Attributes after fitting**:
 

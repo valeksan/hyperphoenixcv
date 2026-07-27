@@ -51,3 +51,7 @@ uncommitted evaluated trial may execute again after resume.
 
 See [storage recovery](storage_recovery.md) for error taxonomy, WAL/SHM policy,
 and irreversible cleanup details.
+
+Distributed/multi-node execution is not supported by this local SQLite store.
+See [distributed execution gate](distributed_execution_gate.md) for required
+workload and operational approval before that feature can be designed.
