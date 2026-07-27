@@ -21,10 +21,12 @@ class ResultManager:
         scoring: List[str],
         results_csv: str = "hyperphoenix_results.csv",
         metric_directions: Mapping[str, str] | None = None,
+        retain_results: bool = True,
     ):
         self.scoring = scoring
         self.results_csv = results_csv
         self.metric_directions = dict(metric_directions or {})
+        self.retain_results = retain_results
         unknown = set(self.metric_directions) - set(scoring)
         invalid = {name: direction for name, direction in self.metric_directions.items()
                    if direction not in {"maximize", "minimize"}}
@@ -42,6 +44,8 @@ class ResultManager:
         """
         Add a single result to the internal list.
         """
+        if not self.retain_results:
+            return
         key = self.param_key(result.get("params", {}))
         if key not in self._param_keys:
             self.results.append(result)

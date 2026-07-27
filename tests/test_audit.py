@@ -68,6 +68,12 @@ def test_history_retains_failed_pruned_cancelled_diagnostics_and_exception(tmp_p
     failed = next(record for record in records if record["state"] == "failed")
     assert failed["exception_message"] == "boom"
     assert np.isnan(failed["diagnostics"]["reports"][0][1])
+    exported_path = tmp_path / "all-states.json"
+    history.export_json(exported_path)
+    exported = json.loads(exported_path.read_text())
+    assert {_restore(record)["state"] for record in exported["trials"]} == {
+        "failed", "pruned", "cancelled",
+    }
 
 
 def test_minimize_direction_controls_rank_top_result_and_refit(tmp_path):
@@ -95,3 +101,28 @@ def test_callable_refit_uses_complete_cv_result_index(tmp_path):
     search.refit = lambda results: 2
     search._update_best_attributes()
     assert search.best_index_ == 2
+
+
+def test_cv_result_limit_keeps_large_history_out_of_ram_projection(tmp_path):
+    search = _search(tmp_path, param_grid={"C": [0.1, 1.0, 10.0]}, refit=True, max_cv_results=2)
+    X, y = make_classification(n_samples=40, n_features=4, random_state=2)
+
+    with pytest.warns(UserWarning, match="cv_results_ was not materialized"):
+        search.fit(X, y)
+
+    assert search.cv_results_ == {}
+    assert search.cv_results_truncated_ is True
+    assert search.result_manager.results == []
+    assert search.trial_history_.count() == 3
+    assert len(search.get_top_results(2)) == 2
+    assert hasattr(search, "best_estimator_")
+
+
+def test_result_manager_does_not_retain_100k_durable_trial_projections():
+    from hyperphoenixcv.result_manager import ResultManager
+
+    manager = ResultManager(["score"], retain_results=False)
+    for index in range(100_000):
+        manager.add_result({"params": {"trial": index}, "mean_test_score": float(index)})
+
+    assert manager.results == []

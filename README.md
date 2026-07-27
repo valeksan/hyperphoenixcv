@@ -174,6 +174,8 @@ history.export_parquet("audit.parquet") # requires hyperphoenixcv[parquet]
 Use `history.page(offset=0, limit=100)` or `history.iter_records(page_size=1000)`
 for large studies. `metric_directions={"loss": "minimize"}` controls ranking
 and non-Optuna scalar refit; unspecified sklearn scores default to maximize.
+`cv_results_` materializes at most `max_cv_results=10_000` trials by default;
+set it to `None` only when memory budget permits full sklearn projection.
 
 Install optional backend first:
 
@@ -350,6 +352,8 @@ Main class for hyperparameter search.
 - `storage_path`: explicit local SQLite store path; overrides `checkpoint_path` derivation.
 - `dataset_id`: stable dataset identifier. Required for strong resume identity; `None` emits a warning.
 - `resume`: `"auto"` (default), `"must"`, or `"never"`.
+- `max_cv_results`: max trials materialized in `cv_results_` (default=10,000);
+  `None` opts into unbounded projection.
 - `clear_checkpoint=True`: deprecated; call `clear_checkpoint_file()` before
   `fit()` instead. It will be removed in 0.6.
 - `results_csv`: path to CSV file for saving results (default=None).

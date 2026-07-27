@@ -164,6 +164,8 @@ history.export_parquet("audit.parquet") # требует hyperphoenixcv[parquet]
 Для больших study: `history.page(offset=0, limit=100)` или
 `history.iter_records(page_size=1000)`. `metric_directions={"loss": "minimize"}`
 задаёт ranking/non-Optuna scalar refit; default sklearn scores — maximize.
+`cv_results_` по default materializes максимум `max_cv_results=10_000` trials;
+`None` задавайте только при достаточном memory budget для полной sklearn projection.
 
 Установите optional backend:
 
@@ -329,6 +331,8 @@ hp.fit(X, y, groups=groups)
 - `storage_path`: явный путь к локальному SQLite store; заменяет вывод из `checkpoint_path`.
 - `dataset_id`: стабильный идентификатор датасета. Нужен для сильной identity resume; `None` выдаёт warning.
 - `resume`: `"auto"` (по умолчанию), `"must"` или `"never"`.
+- `max_cv_results`: max trials в materialized `cv_results_` (по умолчанию=10,000);
+  `None` включает unbounded projection.
 - `clear_checkpoint=True`: deprecated; перед `fit()` вызывайте
   `clear_checkpoint_file()`. Параметр будет удалён в 0.6.
 - `results_csv`: путь к CSV‑файлу для сохранения результатов (по умолчанию=None).

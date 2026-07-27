@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from collections.abc import Mapping
 from datetime import datetime, timezone
 import json
 import math
@@ -38,7 +39,7 @@ def _json_value(value: Any) -> Any:
             return _json_value(value.item())
         except (TypeError, ValueError):
             pass
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {str(key): _json_value(item) for key, item in sorted(value.items(), key=lambda item: str(item[0]))}
     if isinstance(value, list):
         return [_json_value(item) for item in value]
@@ -300,6 +301,11 @@ class SQLiteStudyStore:
 
     def results(self, study_id: str) -> list[dict[str, Any]]:
         return [record["result"] for record in self.iter_trials(study_id)]
+
+    def iter_results(self, study_id: str) -> Iterator[dict[str, Any]]:
+        """Stream result projection for compatibility consumers."""
+        for record in self.iter_trials(study_id):
+            yield record["result"]
 
     def trial_count(self, study_id: str, states: set[str] | None = None) -> int:
         """Count terminal trials without materializing their result JSON."""

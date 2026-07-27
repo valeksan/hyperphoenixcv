@@ -11,6 +11,7 @@ an optional Optuna backend, and experimental surrogate-ranking compatibility.
 import warnings
 import secrets
 import logging
+import heapq
 from pathlib import Path
 from collections.abc import Mapping
 import numpy as np
@@ -136,6 +137,7 @@ class HyperPhoenixCV(BaseEstimator):
         memmap_temp_folder: str | None = None,
         joblib_batch_size: int | str = "auto",
         callbacks: list[StudyCallback] | tuple[StudyCallback, ...] | None = None,
+        max_cv_results: int | None = 10_000,
     ):
         """
         Initializes HyperPhoenixCV.
@@ -225,6 +227,7 @@ class HyperPhoenixCV(BaseEstimator):
         self.memmap_temp_folder = memmap_temp_folder
         self.joblib_batch_size = joblib_batch_size
         self.callbacks = callbacks
+        self.max_cv_results = max_cv_results
 
     @property
     def _scoring(self):
@@ -255,6 +258,7 @@ class HyperPhoenixCV(BaseEstimator):
             scoring=self._scoring,
             results_csv=self.results_csv,
             metric_directions=self._metric_directions(),
+            retain_results=False,
         )
         self.cv_executor = SklearnCVEvaluator(
             cv=self.cv,
@@ -269,7 +273,7 @@ class HyperPhoenixCV(BaseEstimator):
         """Discard runtime and fitted state from a previous fit attempt."""
         for name in (
             "search_strategy", "study_store", "study_id", "study_engine", "trial_scheduler", "result_manager", "cv_executor",
-            "_study_identity", "best_params_", "best_score_", "best_estimator_", "cv_results_", "best_index_",
+            "_study_identity", "best_params_", "best_score_", "best_estimator_", "cv_results_", "best_index_", "cv_results_truncated_",
         ):
             self.__dict__.pop(name, None)
 
@@ -305,6 +309,12 @@ class HyperPhoenixCV(BaseEstimator):
         if callable(self.refit):
             return
         raise ValueError("refit must be bool, scorer name, or callable")
+
+    def _validate_result_limit(self) -> None:
+        if self.max_cv_results is not None and (
+            not isinstance(self.max_cv_results, int) or self.max_cv_results < 1
+        ):
+            raise ValueError("max_cv_results must be a positive integer or None")
 
     def _validate_strategy(self) -> None:
         self._metric_directions()
@@ -496,6 +506,7 @@ class HyperPhoenixCV(BaseEstimator):
         """
         self._reset_fit_state()
         self._validate_refit()
+        self._validate_result_limit()
         self._validate_strategy()
         self._validate_scheduler()
         if self.clear_checkpoint:
@@ -540,7 +551,7 @@ class HyperPhoenixCV(BaseEstimator):
                 "memmap_max_nbytes": self.memmap_max_nbytes,
                 "memmap_temp_folder": self.memmap_temp_folder,
                 "joblib_batch_size": self.joblib_batch_size,
-                "attempts": existing_scheduler.get("attempts", len(self.study_store.results(self.study_id))),
+                "attempts": existing_scheduler.get("attempts", self.study_store.trial_count(self.study_id)),
                 "cancellation_reason": existing_scheduler.get("cancellation_reason"),
             }
         })
@@ -556,11 +567,12 @@ class HyperPhoenixCV(BaseEstimator):
                 state["sampler_random_state"] = sampler_random_state
                 self.study_store.update_study_state(self.study_id, state)
         self._create_runtime_components(sampler_random_state=sampler_random_state)
-        checkpoint_results = self.study_store.results(self.study_id)
-        self.result_manager.add_results(checkpoint_results)
-
         total_candidates = self.search_strategy.total_candidates()
-        completed_keys = self.study_store.completed_param_keys(self.study_id)
+        existing_trials = self.study_store.trial_count(self.study_id)
+        if callable(self.refit) and self.max_cv_results is not None and (
+            existing_trials > self.max_cv_results or total_candidates > self.max_cv_results
+        ):
+            raise ValueError("callable refit requires full cv_results_; increase max_cv_results or set it to None")
         adaptive_search = self.random_search or self.use_bayesian_optimization
         if self.early_stopping_patience is not None and not adaptive_search:
             warnings.warn(
@@ -588,17 +600,32 @@ class HyperPhoenixCV(BaseEstimator):
             evaluate_batch=lambda proposals: self._evaluate_batch(proposals, X, y, groups, fit_params),
             event_publisher=self.event_publisher,
         )
-        self.study_engine.run(checkpoint_results)
+        self.study_engine.run()
+
+        trial_count = self.study_store.trial_count(self.study_id)
+        self.cv_results_truncated_ = self.max_cv_results is not None and trial_count > self.max_cv_results
+        if self.cv_results_truncated_:
+            warnings.warn(
+                f"Study has {trial_count} trials; cv_results_ was not materialized because "
+                f"max_cv_results={self.max_cv_results}. Use trial_history_ for paginated audit access.",
+                UserWarning, stacklevel=2,
+            )
+        else:
+            self.result_manager.retain_results = True
+            self.result_manager.add_results(self.study_store.iter_results(self.study_id))
 
         # Save results to CSV
         try:
-            self.result_manager.save_to_csv()
+            if self.cv_results_truncated_:
+                self.trial_history_.export_csv(self.results_csv)
+            else:
+                self.result_manager.save_to_csv()
         except Exception as exc:
             self.event_publisher.emit(ExportFailed(self.study_id, self.results_csv, type(exc).__name__, str(exc)))
             raise
 
         # Update attributes for compatibility with GridSearchCV
-        self.cv_results_ = self.result_manager.format_cv_results()
+        self.cv_results_ = {} if self.cv_results_truncated_ else self.result_manager.format_cv_results()
         self.pareto_front_ = self._pareto_front() if self._is_multi_objective() else []
         self._update_best_attributes()
 
@@ -616,6 +643,27 @@ class HyperPhoenixCV(BaseEstimator):
     def _update_best_attributes(self):
         """Set best_params_, best_score_, and best_index_ from result_manager."""
         if self._is_multi_objective() and self.refit is False:
+            return
+        if getattr(self, "cv_results_truncated_", False):
+            if callable(self.refit):
+                raise RuntimeError("callable refit requires materialized cv_results_")
+            metric = self.refit if isinstance(self.refit, str) else self._scoring[0]
+            score_key = f"mean_test_{metric}"
+            direction = self._metric_directions()[metric]
+            best_result, best_index, best_value = None, None, None
+            for index, result in enumerate(self.study_store.iter_results(self.study_id)):
+                if result.get("trial_state", "completed") != "completed" or "error" in result:
+                    continue
+                value = result.get(score_key)
+                if value is None or (isinstance(value, float) and np.isnan(value)):
+                    continue
+                if best_value is None or (value > best_value if direction == "maximize" else value < best_value):
+                    best_result, best_index, best_value = result, index, value
+            if best_result is None:
+                return
+            self.best_params_ = best_result["params"]
+            self.best_score_ = best_value
+            self.best_index_ = best_index
             return
         valid_results = [r for r in self.result_manager.results if 'error' not in r]
         if not valid_results:
@@ -743,7 +791,30 @@ class HyperPhoenixCV(BaseEstimator):
         --------
         pd.DataFrame: Top‑N results.
         """
-        return self.result_manager.get_top_results(n)
+        if n < 1:
+            return pd.DataFrame()
+        if not getattr(self, "cv_results_truncated_", False):
+            return self.result_manager.get_top_results(n)
+        metric = self._scoring[0]
+        score_key = f"mean_test_{metric}"
+        direction = self._metric_directions()[metric]
+        heap = []
+        with SQLiteStudyStore(self._storage_path()) as store:
+            for index, result in enumerate(store.iter_results(self.study_id)):
+                if result.get("trial_state", "completed") != "completed" or "error" in result:
+                    continue
+                score = result.get(score_key)
+                if score is None or (isinstance(score, float) and np.isnan(score)):
+                    continue
+                key = float(score) if direction == "maximize" else -float(score)
+                entry = (key, index, result)
+                if len(heap) < n:
+                    heapq.heappush(heap, entry)
+                elif key > heap[0][0]:
+                    heapq.heapreplace(heap, entry)
+        manager = ResultManager(self._scoring, metric_directions=self._metric_directions())
+        manager.add_results([entry[2] for entry in heap])
+        return manager.get_top_results(n)
 
     @property
     def trial_history_(self) -> TrialHistory:

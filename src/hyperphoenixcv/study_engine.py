@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from .storage.protocols import StudyStore
 from .events import (
@@ -82,18 +82,36 @@ class StudyEngine:
         state.update(patch)
         self.store.update_study_state(self.study_id, state)
 
-    def run(self, checkpoint_results: list[dict[str, Any]]) -> StudyRun:
+    def _terminal_count(self) -> int:
+        """Store count in production; compatibility fallback for test stores."""
+        count = getattr(self.store, "trial_count", None)
+        return count(self.study_id) if count is not None else len(self.result_manager.results)
+
+    def run(self, checkpoint_results: Iterable[dict[str, Any]] | None = None) -> StudyRun:
         """Run until exhausted, cancelled, or early-stopping condition fires."""
-        self.strategy.restore(checkpoint_results)
+        # Production uses store streams. ``checkpoint_results`` remains for
+        # engine unit tests and third-party lightweight store implementations.
+        if checkpoint_results is None:
+            checkpoint_count = self._terminal_count()
+            restore_results = self.store.iter_results(self.study_id)
+        else:
+            checkpoint_results = list(checkpoint_results)
+            checkpoint_count = len(checkpoint_results)
+            restore_results = checkpoint_results
+        self.strategy.restore(restore_results)
         self.event_publisher.emit(StudyStarted(self.study_id, self.spec.total_candidates))
-        if checkpoint_results:
-            self.event_publisher.emit(StudyResumed(self.study_id, len(checkpoint_results)))
+        if checkpoint_count:
+            self.event_publisher.emit(StudyResumed(self.study_id, checkpoint_count))
         early_enabled = self.spec.early_stopping_patience is not None and self.spec.adaptive_search
         primary_metric = self.spec.scoring[0]
-        best_score, no_improvement_count = _early_stop_from_results(checkpoint_results, primary_metric)
+        if checkpoint_results is None:
+            initial_results = self.store.iter_results(self.study_id)
+        else:
+            initial_results = checkpoint_results
+        best_score, no_improvement_count = _early_stop_from_results(initial_results, primary_metric)
         if early_enabled or self.spec.timeout_enabled or self.spec.cancel_callback is not None:
             saved = self.store.study_state(self.study_id).get("early_stopping", {})
-            if saved.get("metric") == primary_metric and saved.get("processed_trial_count") == len(checkpoint_results):
+            if saved.get("metric") == primary_metric and saved.get("processed_trial_count") == checkpoint_count:
                 best_score = saved["best_score"]
                 no_improvement_count = saved["no_improvement_count"]
 
@@ -170,7 +188,7 @@ class StudyEngine:
                         "metric": primary_metric,
                         "best_score": best_score,
                         "no_improvement_count": no_improvement_count,
-                        "processed_trial_count": len(self.result_manager.results),
+                        "processed_trial_count": self._terminal_count(),
                         "stop_reason": stopped_reason,
                     }})
                     if not proposals_available:
@@ -178,5 +196,5 @@ class StudyEngine:
         if stopped_reason is not None and stopped_reason != "cancel_callback":
             self.event_publisher.emit(StudyStopped(self.study_id, stopped_reason))
         elif stopped_reason is None:
-            self.event_publisher.emit(StudyCompleted(self.study_id, len(self.result_manager.results)))
+            self.event_publisher.emit(StudyCompleted(self.study_id, self._terminal_count()))
         return StudyRun(stopped_reason=stopped_reason, attempts=attempts)
