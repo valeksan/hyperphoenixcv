@@ -4,36 +4,16 @@ Search strategies for hyperparameter optimization.
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Mapping
-from typing import Callable, List, Dict, Any, Optional, Protocol
+from typing import Callable, List, Dict, Any, Optional
 import warnings
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import ParameterGrid, ParameterSampler
+from sklearn.model_selection import ParameterGrid
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import LabelEncoder
 
 from .study_identity import param_key
-
-
-class SearchSpace(Protocol):
-    """Finite or streaming parameter source."""
-
-    def iter_parameters(self) -> Iterator[Dict[str, Any]]: ...
-    def total_candidates(self) -> int: ...
-
-
-class Sampler(Protocol):
-    """Resume-safe proposal protocol used by search coordinator."""
-
-    def restore(self, results: List[Dict[str, Any]]) -> None: ...
-    def ask(self, n: int) -> List[Dict[str, Any]]: ...
-    def tell(self, results: List[Dict[str, Any]]) -> None: ...
-
-
-class Evaluator(Protocol):
-    """One parameter assignment -> terminal trial result."""
-
-    def evaluate(self, estimator, X, y, params: Dict[str, Any], groups=None) -> Dict[str, Any]: ...
+from .search_protocols import Evaluator, Sampler, SearchSpace
 
 
 class SearchStrategy(ABC, SearchSpace, Sampler):
@@ -108,63 +88,8 @@ class SearchStrategy(ABC, SearchSpace, Sampler):
                 self._known_param_keys.add(param_key(result["params"]))
 
 
-class ExhaustiveSearchStrategy(SearchStrategy):
-    """
-    Exhaustive grid search (ParameterGrid).
-    """
-
-    def generate_parameters(self) -> List[Dict[str, Any]]:
-        """Compatibility API. New engine code must use ``iter_parameters``."""
-        return list(self.iter_parameters())
-
-    def iter_parameters(self) -> Iterator[Dict[str, Any]]:
-        return iter(ParameterGrid(self.param_grid))
-
-    def total_candidates(self) -> int:
-        return len(ParameterGrid(self.param_grid))
-
-
-class RandomSearchStrategy(SearchStrategy):
-    """
-    Random search strategy.
-    """
-
-    def __init__(
-        self,
-        param_grid: Mapping[str, Any] | List[Dict[str, Any]],
-        n_iter: int = 10,
-        random_state: Optional[int] = None,
-    ):
-        super().__init__(param_grid)
-        self.n_iter = n_iter
-        self.random_state = random_state
-
-    def generate_parameters(self) -> List[Dict[str, Any]]:
-        """Compatibility API. New engine code must use ``iter_parameters``."""
-        return list(self.iter_parameters())
-
-    def iter_parameters(self) -> Iterator[Dict[str, Any]]:
-        """Match sklearn ``ParameterSampler`` order without candidate materialization.
-
-        A persisted effective seed makes replay deterministic after a crash.  For
-        distribution-valued spaces sklearn samples with replacement; ``n_iter``
-        is therefore both proposal and resume budget.
-        """
-        return iter(ParameterSampler(
-            self.param_grid,
-            n_iter=max(self.n_iter, 0),
-            random_state=self.random_state,
-        ))
-
-    def total_candidates(self) -> int:
-        has_distribution = any(
-            hasattr(values, "rvs")
-            for branch in (self.param_grid if isinstance(self.param_grid, list) else [self.param_grid])
-            for values in branch.values()
-        )
-        if has_distribution:
-            return max(self.n_iter, 0)
-        return min(max(self.n_iter, 0), len(ParameterGrid(self.param_grid)))
+from .search_grid import ExhaustiveSearchStrategy
+from .search_random import RandomSearchStrategy
 
 
 class OptunaSearchStrategy(SearchStrategy):
