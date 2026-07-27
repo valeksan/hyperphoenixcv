@@ -23,13 +23,15 @@ classifiers = [
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
-  "Operating System :: OS Independent",
+  # Windows durability behavior is not yet covered by CI.
+  "Operating System :: POSIX :: Linux",
 ]
 dependencies = [
-  "numpy>=1.19.0",
-  "scikit-learn>=1.0.0",
-  "pandas>=1.0.0",
-  "joblib>=1.0.0",
+  "numpy>=1.21.6",
+  # ``cross_validate(..., params=...)`` is part of evaluator contract.
+  "scikit-learn>=1.4.0",
+  "pandas>=1.5.0",
+  "joblib>=1.2.0",
 ]
 
 [project.optional-dependencies]

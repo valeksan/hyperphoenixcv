@@ -36,12 +36,6 @@ class Evaluator(Protocol):
     def evaluate(self, estimator, X, y, params: Dict[str, Any], groups=None) -> Dict[str, Any]: ...
 
 
-class Scheduler(Protocol):
-    """Coordinator capacity contract. Scheduler implementation lands in P1.4."""
-
-    def free_workers(self) -> int: ...
-
-
 class SearchStrategy(ABC, SearchSpace, Sampler):
     """
     Abstract base class for hyperparameter search strategies.

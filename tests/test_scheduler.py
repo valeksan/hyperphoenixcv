@@ -82,7 +82,7 @@ def test_cancel_callback_stops_before_next_trial_and_persists_reason(tmp_path):
 
 
 def test_timeout_commits_resumable_failed_trial_and_reason(tmp_path, monkeypatch):
-    import hyperphoenixcv.core as core_module
+    import hyperphoenixcv.scheduler as scheduler_module
 
     class TimedOutParallel:
         def __init__(self, **kwargs):
@@ -92,7 +92,7 @@ def test_timeout_commits_resumable_failed_trial_and_reason(tmp_path, monkeypatch
             list(tasks)
             raise TimeoutError()
 
-    monkeypatch.setattr(core_module, "Parallel", TimedOutParallel)
+    monkeypatch.setattr(scheduler_module, "Parallel", TimedOutParallel)
     X, y = make_classification(n_samples=40, n_features=4, random_state=0)
     search = make_search(
         tmp_path, param_grid={"C": [0.1]}, n_jobs=2, trial_timeout=0.01,
@@ -108,7 +108,7 @@ def test_timeout_commits_resumable_failed_trial_and_reason(tmp_path, monkeypatch
 
 
 def test_trial_parallelism_passes_thread_and_memmap_limits_without_oversubscription(tmp_path, monkeypatch):
-    import hyperphoenixcv.core as core_module
+    import hyperphoenixcv.scheduler as scheduler_module
 
     seen = {}
 
@@ -124,8 +124,8 @@ def test_trial_parallelism_passes_thread_and_memmap_limits_without_oversubscript
         def __call__(self, tasks):
             return [func(*args, **kwargs) for func, args, kwargs in tasks]
 
-    monkeypatch.setattr(core_module, "parallel_config", fake_parallel_config)
-    monkeypatch.setattr(core_module, "Parallel", ImmediateParallel)
+    monkeypatch.setattr(scheduler_module, "parallel_config", fake_parallel_config)
+    monkeypatch.setattr(scheduler_module, "Parallel", ImmediateParallel)
     X, y = make_classification(n_samples=40, n_features=4, random_state=0)
     search = make_search(
         tmp_path, param_grid={"C": [0.1, 1.0]}, n_jobs=2,
