@@ -5,12 +5,37 @@ CVExecutor performs cross‑validation for a given parameter set.
 import numpy as np
 import logging
 from collections.abc import Mapping
+from sklearn import get_config
 from sklearn.base import clone, is_classifier
 from sklearn.model_selection import check_cv, cross_validate
 from typing import Dict, Any, List, Union
 
 
 logger = logging.getLogger(__name__)
+
+
+class MetadataRoutingAdapter:
+    """Bridge the sklearn 1.4 ``params`` API and metadata-routing mode.
+
+    ``groups`` is consumed while resolving the CV splitter.  The resulting
+    iterable splits are then passed to ``cross_validate``; sending ``groups``
+    again is both redundant and rejected when sklearn metadata routing is on.
+    Fit metadata is passed exactly once through ``params`` in either mode.
+    """
+
+    @staticmethod
+    def cross_validate_kwargs(groups, fit_params: Dict[str, Any] | None) -> Dict[str, Any]:
+        # ``groups`` has already been used by ``_resolve_splits``.  This also
+        # gives custom splitters and one-shot iterable splits identical behavior
+        # with metadata routing enabled and disabled.
+        del groups
+        params = dict(fit_params or {})
+        return {"params": params or None}
+
+    @staticmethod
+    def metadata_routing_enabled() -> bool:
+        """Expose active sklearn semantics for diagnostics/tests."""
+        return bool(get_config().get("enable_metadata_routing", False))
 
 
 class SklearnCVEvaluator:
@@ -107,6 +132,7 @@ class SklearnCVEvaluator:
 
         try:
             cv_splitter = self._resolve_splits(estimator, X, y, groups)
+            metadata = MetadataRoutingAdapter.cross_validate_kwargs(groups, fit_params)
             scores = cross_validate(
                 estimator_with_params,
                 X,
@@ -114,8 +140,7 @@ class SklearnCVEvaluator:
                 cv=cv_splitter,
                 scoring=self._scoring_spec,
                 n_jobs=self.n_jobs,
-                groups=groups,
-                params=fit_params,
+                **metadata,
                 return_train_score=False,
                 pre_dispatch=self.pre_dispatch,
                 error_score=self.error_score,

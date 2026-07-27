@@ -87,6 +87,21 @@ def test_minimize_direction_controls_rank_top_result_and_refit(tmp_path):
     assert manager.format_cv_results()["rank_test_loss"] == [2, 1]
 
 
+def test_custom_metric_minimize_direction_controls_search_refit(tmp_path):
+    def loss(estimator, X, y):
+        return estimator.get_params()["C"]
+
+    X, y = make_classification(n_samples=40, n_features=4, random_state=4)
+    search = _search(
+        tmp_path, scoring=loss, scorer_id="test-loss-v1", refit=True,
+        metric_directions={"score": "minimize"},
+    )
+    search.fit(X, y)
+    assert search.best_params_ == {"C": 0.1}
+    assert search.best_score_ == pytest.approx(0.1)
+    assert search.cv_results_["rank_test_score"] == [1, 2]
+
+
 def test_callable_refit_uses_complete_cv_result_index(tmp_path):
     search = _search(tmp_path, refit=lambda results: 1)
     search.result_manager = __import__("hyperphoenixcv.result_manager", fromlist=["ResultManager"]).ResultManager(["accuracy"])
