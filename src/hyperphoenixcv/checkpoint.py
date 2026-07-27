@@ -6,12 +6,16 @@ import os
 from pathlib import Path
 import tempfile
 import joblib
+import logging
 from typing import List, Dict, Any
 
 from .study_identity import (
     CheckpointEnvelope,
     StudyIdentity,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class CheckpointManager:
@@ -96,7 +100,7 @@ class CheckpointManager:
         else:
             self._atomic_dump(results)
         if self.verbose:
-            print(f"Checkpoint saved to {self.checkpoint_path}")
+            logger.info("Checkpoint saved")
 
     def clear(self):
         """
@@ -105,9 +109,9 @@ class CheckpointManager:
         if os.path.exists(self.checkpoint_path):
             os.remove(self.checkpoint_path)
             if self.verbose:
-                print(f"Deleted checkpoint: {self.checkpoint_path}")
+                logger.info("Checkpoint deleted")
         elif self.verbose:
-            print(f"Checkpoint {self.checkpoint_path} does not exist.")
+            logger.info("Checkpoint does not exist")
 
 
 class CheckpointCorruptionError(ValueError):

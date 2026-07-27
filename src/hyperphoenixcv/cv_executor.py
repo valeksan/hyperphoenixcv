@@ -3,10 +3,14 @@ CVExecutor performs cross‑validation for a given parameter set.
 """
 
 import numpy as np
+import logging
 from collections.abc import Mapping
 from sklearn.base import clone, is_classifier
 from sklearn.model_selection import check_cv, cross_validate
 from typing import Dict, Any, List, Union
+
+
+logger = logging.getLogger(__name__)
 
 
 class SklearnCVEvaluator:
@@ -124,7 +128,7 @@ class SklearnCVEvaluator:
             if self.error_score == 'raise':
                 raise
             if self.verbose:
-                print(f"⚠️ Error during CV for params {params}: {e}")
+                logger.warning("CV evaluation failed: %s", type(e).__name__)
             failed_scores = [float(self.error_score)] * len(self._resolve_splits(estimator, X, y, groups))
             result = {
                 'params': params,
