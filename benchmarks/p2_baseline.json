@@ -1,0 +1,220 @@
+{
+  "large_space": {
+    "candidate_count": 1000000000.0,
+    "first_ten_seconds": 0.00023746399892843328,
+    "peak_rss_kib": 154444.0
+  },
+  "parallelism": [
+    {
+      "cpu_utilization_percent": 3.7095173280210227,
+      "inner_max_num_threads": 1,
+      "n_jobs": 2,
+      "parallelism": "trials",
+      "wall_seconds": 2.057703449001565
+    },
+    {
+      "cpu_utilization_percent": 5.4357236500080415,
+      "inner_max_num_threads": 1,
+      "n_jobs": 2,
+      "parallelism": "folds",
+      "wall_seconds": 2.074568158001057
+    }
+  ],
+  "platform": {
+    "cpu_count": 12,
+    "python": "3.12.3 (main, Jun 19 2026, 12:46:00) [GCC 13.3.0]"
+  },
+  "profile": [
+    {
+      "profile": "benchmarks/p2_profile.txt",
+      "top": [
+        "        1    0.000    0.000    0.822    0.822 /home/vi/Projects/hyperphoenixcv/src/hyperphoenixcv/core.py:475(_fit_impl)",
+        "        1    0.000    0.000    0.705    0.705 /home/vi/Projects/hyperphoenixcv/src/hyperphoenixcv/study_engine.py:90(run)",
+        "        8    0.000    0.000    0.610    0.076 /home/vi/Projects/hyperphoenixcv/src/hyperphoenixcv/core.py:576(<lambda>)",
+        "        8    0.000    0.000    0.610    0.076 /home/vi/Projects/hyperphoenixcv/src/hyperphoenixcv/core.py:353(_evaluate_batch)",
+        "        8    0.000    0.000    0.610    0.076 /home/vi/Projects/hyperphoenixcv/src/hyperphoenixcv/scheduler.py:58(evaluate)",
+        "        8    0.000    0.000    0.610    0.076 /home/vi/Projects/hyperphoenixcv/src/hyperphoenixcv/scheduler.py:12(_evaluate_trial)",
+        "        8    0.000    0.000    0.610    0.076 /home/vi/Projects/hyperphoenixcv/src/hyperphoenixcv/cv_executor.py:105(evaluate)",
+        "     58/9    0.002    0.000    0.594    0.066 /home/vi/.local/lib/python3.12/site-packages/sklearn/utils/_param_validation.py:187(wrapper)",
+        "        8    0.001    0.000    0.553    0.069 /home/vi/.local/lib/python3.12/site-packages/sklearn/model_selection/_validation.py:74(cross_validate)",
+        "        8    0.000    0.000    0.530    0.066 /home/vi/.local/lib/python3.12/site-packages/sklearn/utils/parallel.py:54(__call__)",
+        "        8    0.000    0.000    0.530    0.066 /home/vi/.local/lib/python3.12/site-packages/joblib/parallel.py:1969(__call__)",
+        "       32    0.000    0.000    0.529    0.017 /home/vi/.local/lib/python3.12/site-packages/joblib/parallel.py:1888(_get_sequential_output)",
+        "       16    0.002    0.000    0.509    0.032 /home/vi/.local/lib/python3.12/site-packages/sklearn/utils/parallel.py:140(__call__)",
+        "       16    0.001    0.000    0.496    0.031 /home/vi/.local/lib/python3.12/site-packages/sklearn/model_selection/_validation.py:666(_fit_and_score)",
+        "       16    0.000    0.000    0.245    0.015 /home/vi/Projects/hyperphoenixcv/benchmarks/p2_performance_benchmark.py:64(fit)",
+        "       16    0.241    0.015    0.241    0.015 {built-in method time.sleep}",
+        "       16    0.000    0.000    0.192    0.012 /home/vi/.local/lib/python3.12/site-packages/sklearn/model_selection/_validation.py:933(_score)",
+        "       16    0.001    0.000    0.191    0.012 /home/vi/.local/lib/python3.12/site-packages/sklearn/metrics/_scorer.py:138(__call__)",
+        "       16    0.000    0.000    0.189    0.012 /home/vi/.local/lib/python3.12/site-packages/sklearn/metrics/_scorer.py:415(_score)",
+        "       16    0.000    0.000    0.118    0.007 /home/vi/.local/lib/python3.12/site-packages/sklearn/metrics/_classification.py:331(accuracy_score)",
+        "       50    0.003    0.000    0.109    0.002 /home/vi/.local/lib/python3.12/site-packages/sklearn/utils/multiclass.py:249(type_of_target)",
+        "      134    0.006    0.000    0.104    0.001 /home/vi/.local/lib/python3.12/site-packages/sklearn/utils/validation.py:733(check_array)",
+        "       16    0.001    0.000    0.102    0.006 /home/vi/.local/lib/python3.12/site-packages/sklearn/metrics/_classification.py:74(_check_targets)",
+        "        1    0.010    0.010    0.091    0.091 /home/vi/Projects/hyperphoenixcv/src/hyperphoenixcv/storage/sqlite_store.py:151(__init__)",
+        "      812    0.004    0.000    0.075    0.000 {built-in method builtins.next}",
+        "      134    0.001    0.000    0.071    0.001 /home/vi/.local/lib/python3.12/site-packages/sklearn/utils/validation.py:44(_nw_into_df_or_series)",
+        "        1    0.001    0.001    0.071    0.071 /home/vi/Projects/hyperphoenixcv/src/hyperphoenixcv/storage/sqlite_store.py:73(_network_filesystem)",
+        "       75    0.000    0.000    0.068    0.001 /usr/lib/python3.12/contextlib.py:141(__exit__)",
+        "",
+        ""
+      ]
+    }
+  ],
+  "profiled_components": {
+    "joblib_transport_8mib_seconds": 0.04126359899964882,
+    "param_key_100k_seconds": 0.7256633569995756,
+    "projection_100k_seconds": 0.02118090099975234,
+    "projection_retained_rows": 0.0
+  },
+  "projection_bound": {
+    "offered_rows": 100000.0,
+    "retained_rows": 0.0
+  },
+  "resume_latency": [
+    {
+      "peak_rss_kib": 155212.0,
+      "resume_seconds": 0.04080941500069457,
+      "trials": 1000.0
+    },
+    {
+      "peak_rss_kib": 158540.0,
+      "resume_seconds": 0.3455234399989422,
+      "trials": 10000.0
+    },
+    {
+      "peak_rss_kib": 175532.0,
+      "resume_seconds": 3.4969529760019213,
+      "trials": 100000.0
+    }
+  ],
+  "schema": 1,
+  "workloads": {
+    "cheap": {
+      "cpu_utilization_percent": {
+        "median": 53.19555595562061,
+        "p95": 56.60170853016778
+      },
+      "peak_rss_kib": {
+        "median": 154188.0,
+        "p95": 154188.0
+      },
+      "proposal_p50_seconds": {
+        "median": 2.9612998332595453e-05,
+        "p95": 3.1596799090038985e-05
+      },
+      "proposal_p95_seconds": {
+        "median": 4.819134901481446e-05,
+        "p95": 5.167256927961716e-05
+      },
+      "serialized_bytes": {
+        "median": 5980.0,
+        "p95": 5980.0
+      },
+      "store_commit_p50_seconds": {
+        "median": 0.0020230210011504823,
+        "p95": 0.0020936663004249567
+      },
+      "store_commit_p95_seconds": {
+        "median": 0.0024501491991031797,
+        "p95": 0.002519704578044184
+      },
+      "target_trial_seconds": {
+        "median": 0.005,
+        "p95": 0.005
+      },
+      "trials_per_second": {
+        "median": 45.58351078878795,
+        "p95": 55.14018273348716
+      },
+      "wall_seconds": {
+        "median": 0.17550205900261062,
+        "p95": 0.18672007839995786
+      }
+    },
+    "expensive": {
+      "cpu_utilization_percent": {
+        "median": 6.731350320936955,
+        "p95": 7.1688994204135925
+      },
+      "peak_rss_kib": {
+        "median": 154316.0,
+        "p95": 154418.4
+      },
+      "proposal_p50_seconds": {
+        "median": 2.7727997803594917e-05,
+        "p95": 2.8062400815542787e-05
+      },
+      "proposal_p95_seconds": {
+        "median": 3.8242249684117265e-05,
+        "p95": 4.172877026576316e-05
+      },
+      "serialized_bytes": {
+        "median": 5980.0,
+        "p95": 5980.0
+      },
+      "store_commit_p50_seconds": {
+        "median": 0.0018376590014668182,
+        "p95": 0.00186904570000479
+      },
+      "store_commit_p95_seconds": {
+        "median": 0.002173918697735644,
+        "p95": 0.0023410892590618455
+      },
+      "target_trial_seconds": {
+        "median": 0.15,
+        "p95": 0.15
+      },
+      "trials_per_second": {
+        "median": 5.808090343570528,
+        "p95": 5.824620724562025
+      },
+      "wall_seconds": {
+        "median": 1.3773890430020401,
+        "p95": 1.3825472677977815
+      }
+    },
+    "medium": {
+      "cpu_utilization_percent": {
+        "median": 24.11381423154097,
+        "p95": 25.312636492196056
+      },
+      "peak_rss_kib": {
+        "median": 154188.0,
+        "p95": 154316.0
+      },
+      "proposal_p50_seconds": {
+        "median": 2.7656999009195715e-05,
+        "p95": 3.060540184378624e-05
+      },
+      "proposal_p95_seconds": {
+        "median": 3.89890019505401e-05,
+        "p95": 4.943704207107657e-05
+      },
+      "serialized_bytes": {
+        "median": 5980.0,
+        "p95": 5980.0
+      },
+      "store_commit_p50_seconds": {
+        "median": 0.0018469829992682207,
+        "p95": 0.001938894898921717
+      },
+      "store_commit_p95_seconds": {
+        "median": 0.002253168999959598,
+        "p95": 0.002507651010964764
+      },
+      "target_trial_seconds": {
+        "median": 0.03,
+        "p95": 0.03
+      },
+      "trials_per_second": {
+        "median": 21.573788043883315,
+        "p95": 21.843646333530547
+      },
+      "wall_seconds": {
+        "median": 0.37082036699939636,
+        "p95": 0.37714394140057267
+      }
+    }
+  }
+}

@@ -18,7 +18,8 @@ python benchmarks/p2_performance_benchmark.py --runs 3 --resume-sizes 1000
 
 Harness records: wall time, throughput, proposal/store p50+p95, process peak
 RSS (KiB on Linux), serialized SQLite JSON bytes, CPU utilization, 10^9-space
-laziness, 10^3/10^4/10^5 resume latency, bounded projection check, cProfile.
+laziness, 10^3/10^4/10^5 resume latency, bounded projection check, cProfile,
+100k parameter hashing/projection, and 8 MiB joblib transport.
 
 Taxonomy uses deterministic sleeping estimator: cheap/medium/expensive trials
 target about 5/30/150 ms at two folds. It measures coordination cost without

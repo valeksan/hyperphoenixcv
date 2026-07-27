@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from joblib import Parallel, delayed
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.datasets import make_classification
 
@@ -36,7 +37,7 @@ from hyperphoenixcv import HyperPhoenixCV
 from hyperphoenixcv.result_manager import ResultManager
 from hyperphoenixcv.search_grid import ExhaustiveSearchStrategy
 from hyperphoenixcv.storage.sqlite_store import SQLiteStudyStore
-from hyperphoenixcv.study_identity import StudyIdentity
+from hyperphoenixcv.study_identity import StudyIdentity, param_key
 
 
 # Delay is per fold.  With cv=2, these yield genuine approximately 5/30/150ms
@@ -216,16 +217,47 @@ def measure_resume_latency(size: int) -> dict[str, float]:
 
 
 def measure_projection_bound() -> dict[str, float]:
-    """Check P2.3 projection remains capped while durable history can grow."""
-    manager = ResultManager(["accuracy"])
-    limit, total = 100, 1_000
+    """Check P2.3's no-retention path at the documented 100k scale."""
+    manager = ResultManager(["accuracy"], retain_results=False)
+    total = 100_000
     for value in range(total):
         manager.add_result({"params": {"label": value}, "mean_test_accuracy": 1.0})
-        if len(manager.results) > limit:
-            manager.results.pop(0)
-    if len(manager.results) != limit:
+    if manager.results:
         raise AssertionError("projection bound violated")
     return {"retained_rows": float(len(manager.results)), "offered_rows": float(total)}
+
+
+def _transport_size(payload: bytes) -> int:
+    """Pickle-friendly joblib transport target; no application work."""
+    return len(payload)
+
+
+def measure_profiled_components() -> dict[str, float]:
+    """Direct timings for hotspots hidden below cProfile's end-to-end top 30."""
+    count = 100_000
+    started = time.perf_counter()
+    for value in range(count):
+        param_key({"label": value})
+    hash_seconds = time.perf_counter() - started
+
+    started = time.perf_counter()
+    projection = measure_projection_bound()
+    projection_seconds = time.perf_counter() - started
+
+    payload = b"x" * 1_000_000
+    started = time.perf_counter()
+    sizes = Parallel(n_jobs=2, backend="loky")(
+        delayed(_transport_size)(payload) for _ in range(8)
+    )
+    transport_seconds = time.perf_counter() - started
+    if sizes != [len(payload)] * 8:
+        raise AssertionError("joblib transport altered payload")
+    return {
+        "param_key_100k_seconds": hash_seconds,
+        "projection_100k_seconds": projection_seconds,
+        "joblib_transport_8mib_seconds": transport_seconds,
+        "projection_retained_rows": projection["retained_rows"],
+    }
 
 
 def profile_engine(output: Path) -> list[dict[str, Any]]:
@@ -271,6 +303,7 @@ def main() -> None:
         "parallelism": measure_parallelism(),
         "resume_latency": [measure_resume_latency(size) for size in args.resume_sizes],
         "projection_bound": measure_projection_bound(),
+        "profiled_components": measure_profiled_components(),
         "profile": profile_engine(args.profile),
     }
     if args.baseline:
