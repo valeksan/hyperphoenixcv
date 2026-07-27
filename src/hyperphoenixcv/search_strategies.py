@@ -301,6 +301,10 @@ class OptunaSearchStrategy(SearchStrategy):
             self._terminal_count += 1
 
 
+# Compatibility re-export; implementation lives in ``search_optuna``.
+from .search_optuna import OptunaSearchStrategy
+
+
 class ExperimentalSurrogateRankingStrategy(SearchStrategy):
     """
     Experimental surrogate-ranking strategy. This is not Bayesian optimization:
