@@ -89,9 +89,9 @@ from sklearn.datasets import make_classification
 # Create a simple dataset
 X, y = make_classification(n_samples=1000, n_features=20, random_state=42)
 
-# Define the model and parameter grid
+# Define model and canonical search space
 model = RandomForestClassifier()
-param_grid = {
+search_space = {
     'n_estimators': [50, 100, 200],
     'max_depth': [None, 10, 20],
     'min_samples_split': [2, 5, 10]
@@ -100,10 +100,11 @@ param_grid = {
 # Create a HyperPhoenixCV instance with checkpointing
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=search_space,
+    strategy='grid',
     scoring='accuracy',
     cv=5,
-    checkpoint_path='my_experiment.sqlite3',
+    storage_path='my_experiment.sqlite3',
     dataset_id='training-data-v1',
     verbose=True
 )
@@ -333,7 +334,11 @@ Main class for hyperparameter search.
 **Parameters** (most important):
 
 - `estimator`: scikit‑learn compatible estimator.
-- `param_grid`: dict or list of dicts defining the search space.
+- `search_space`: canonical search-space argument. For `strategy="grid"` and
+  `"random"`, use `ParameterGrid` syntax; for `"optuna"`, use Optuna
+  distributions or callable space.
+- `strategy`: `"grid"`, `"random"`, or `"optuna"`.
+- `n_trials`: trial cap for `"random"` and `"optuna"`.
 - `scoring`: metric(s) to evaluate (string, callable, list, or dict).
 - `cv`: int, cross‑validation splitter, or iterable (default=5).
 - `n_jobs`: number of parallel jobs (default=1).
@@ -348,14 +353,18 @@ Main class for hyperparameter search.
 - `pre_dispatch`: controls number of dispatched jobs (default='2*n_jobs').
 - `error_score`: value to assign when an error occurs (default=np.nan).
 - `early_stopping_patience`: number of iterations without improvement to stop early (default=None, disabled).
-- `checkpoint_path`: local SQLite store path (default=`"hyperphoenix_checkpoint.sqlite3"`). A legacy suffix derives an adjacent `.sqlite3` path; it is never resumed as pickle.
-- `storage_path`: explicit local SQLite store path; overrides `checkpoint_path` derivation.
+- `storage_path`: canonical local SQLite store path. It is never resumed as
+  pickle.
 - `dataset_id`: stable dataset identifier. Required for strong resume identity; `None` emits a warning.
 - `resume`: `"auto"` (default), `"must"`, or `"never"`.
 - `max_cv_results`: max trials materialized in `cv_results_` (default=10,000);
   `None` opts into unbounded projection.
 - `clear_checkpoint=True`: deprecated; call `clear_checkpoint_file()` before
   `fit()` instead. It will be removed in 0.6.
+- Legacy `param_grid`, `random_search`, `n_iter`,
+  `use_bayesian_optimization`, `bayesian_optimizer`, and `checkpoint_path`
+  emit `FutureWarning` in 0.5 and are removed in 0.6. Use `search_space`,
+  `strategy`, `n_trials`, `storage_path`, and `resume` instead.
 - `results_csv`: path to CSV file for saving results (default=None).
 - `verbose`: verbosity level (default=False).
 

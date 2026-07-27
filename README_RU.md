@@ -79,9 +79,9 @@ from sklearn.datasets import make_classification
 # Создаём простой датасет
 X, y = make_classification(n_samples=1000, n_features=20, random_state=42)
 
-# Определяем модель и сетку параметров
+# Определяем модель и каноническое пространство поиска
 model = RandomForestClassifier()
-param_grid = {
+search_space = {
     'n_estimators': [50, 100, 200],
     'max_depth': [None, 10, 20],
     'min_samples_split': [2, 5, 10]
@@ -90,10 +90,11 @@ param_grid = {
 # Создаём экземпляр HyperPhoenixCV с чекпоинтингом
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=search_space,
+    strategy='grid',
     scoring='accuracy',
     cv=5,
-    checkpoint_path='my_experiment.sqlite3',
+    storage_path='my_experiment.sqlite3',
     dataset_id='training-data-v1',
     verbose=True
 )
@@ -312,7 +313,11 @@ hp.fit(X, y, groups=groups)
 **Параметры** (наиболее важные):
 
 - `estimator`: scikit‑learn совместимый estimator.
-- `param_grid`: dict или list of dicts, определяющий пространство поиска.
+- `search_space`: каноническое пространство поиска. Для `strategy="grid"` и
+  `"random"` используется синтаксис `ParameterGrid`; для `"optuna"` —
+  Optuna distributions или callable space.
+- `strategy`: `"grid"`, `"random"` или `"optuna"`.
+- `n_trials`: лимит trials для `"random"` и `"optuna"`.
 - `scoring`: метрика(и) для оценки (строка, функция, список или словарь).
 - `cv`: int, сплиттер кросс‑валидации или итерируемый объект (по умолчанию=5).
 - `n_jobs`: количество параллельных jobs (по умолчанию=1).
@@ -327,14 +332,18 @@ hp.fit(X, y, groups=groups)
 - `pre_dispatch`: управляет количеством одновременно запускаемых jobs (по умолчанию='2*n_jobs').
 - `error_score`: значение, присваиваемое при ошибке (по умолчанию=np.nan).
 - `early_stopping_patience`: количество итераций без улучшений для досрочной остановки (по умолчанию=None, отключено).
-- `checkpoint_path`: путь к локальному SQLite store (по умолчанию=`"hyperphoenix_checkpoint.sqlite3"`). Legacy suffix преобразуется в соседний путь `.sqlite3`; pickle никогда не используется для resume.
-- `storage_path`: явный путь к локальному SQLite store; заменяет вывод из `checkpoint_path`.
+- `storage_path`: канонический путь к локальному SQLite store; pickle никогда
+  не используется для resume.
 - `dataset_id`: стабильный идентификатор датасета. Нужен для сильной identity resume; `None` выдаёт warning.
 - `resume`: `"auto"` (по умолчанию), `"must"` или `"never"`.
 - `max_cv_results`: max trials в materialized `cv_results_` (по умолчанию=10,000);
   `None` включает unbounded projection.
 - `clear_checkpoint=True`: deprecated; перед `fit()` вызывайте
   `clear_checkpoint_file()`. Параметр будет удалён в 0.6.
+- Legacy `param_grid`, `random_search`, `n_iter`,
+  `use_bayesian_optimization`, `bayesian_optimizer` и `checkpoint_path`
+  выдают `FutureWarning` в 0.5 и удаляются в 0.6. Используйте
+  `search_space`, `strategy`, `n_trials`, `storage_path` и `resume`.
 - `results_csv`: путь к CSV‑файлу для сохранения результатов (по умолчанию=None).
 - `verbose`: уровень детализации (по умолчанию=False).
 

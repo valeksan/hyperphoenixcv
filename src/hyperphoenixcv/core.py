@@ -146,17 +146,24 @@ class HyperPhoenixCV(BaseEstimator):
         -----------
         estimator : sklearn estimator
             Model/pipeline for hyperparameter tuning
-        param_grid : dict
-            Dictionary of parameters to search over
+        search_space : dict or callable
+            Canonical space. Grid/random strategies use sklearn parameter-grid
+            syntax; Optuna uses distribution mapping or callable space.
+        strategy : {"grid", "random", "optuna"}
+            Canonical search strategy. Grid is selected only for legacy calls
+            without a strategy during 0.5 migration.
+        n_trials : int, optional
+            Canonical trial cap for random and Optuna strategies.
+        storage_path : str, optional
+            Canonical local SQLite study-store path.
+        param_grid, random_search, n_iter, checkpoint_path :
+            Deprecated 0.5 aliases; removed in 0.6. See migration guide.
         scoring : str or list of str
             Metrics for evaluation (e.g., 'f1', 'accuracy' or ['f1', 'accuracy'])
         cv : int
             Number of folds for cross-validation
         n_jobs : int
             Number of processes for parallel computation
-        checkpoint_path : str
-            SQLite study-store path. A legacy-looking suffix is converted to
-            ``.sqlite3`` for backward-compatible path selection.
         results_csv : str
             Path to CSV file for results
         verbose : bool
@@ -241,16 +248,16 @@ class HyperPhoenixCV(BaseEstimator):
     def _create_runtime_components(self, *, sampler_random_state: int | None = None):
         """Create per-fit collaborators. Constructor must stay side-effect free."""
         self.search_strategy = create_search_strategy(
-            param_grid=self.param_grid,
-            random_search=self.random_search,
-            use_bayesian_optimization=self.use_bayesian_optimization,
-            n_iter=self.n_iter,
+            param_grid=self._resolved_param_grid,
+            random_search=self._resolved_random_search,
+            use_bayesian_optimization=self._resolved_use_surrogate,
+            n_iter=self._resolved_n_trials,
             random_state=sampler_random_state if sampler_random_state is not None else self.random_state,
             bayesian_optimizer=self.bayesian_optimizer,
             scoring=self._scoring[0] if self._scoring else 'f1',
-            strategy=self.strategy,
-            search_space=self.search_space,
-            n_trials=self.n_trials,
+            strategy=self._resolved_strategy,
+            search_space=self._resolved_search_space,
+            n_trials=self._resolved_n_trials,
             optuna_warmup_trials=self.optuna_warmup_trials,
             optuna_directions=(self.optuna_directions or {self._scoring[0]: "maximize"}),
         )
@@ -333,6 +340,79 @@ class HyperPhoenixCV(BaseEstimator):
             raise TypeError("intermediate_evaluator must be callable or None")
         if self.intermediate_evaluator is not None and self.strategy != "optuna":
             raise ValueError("intermediate_evaluator requires strategy='optuna'")
+
+    def _resolve_api_config(self) -> None:
+        """Normalize v0.5 API before any storage side effect.
+
+        Canonical names: search_space, strategy, n_trials, storage_path,
+        resume.  Legacy names stay readable by sklearn clone/get_params until
+        their documented 0.6 removal.
+        """
+        if self.search_space is not None and self.param_grid is not None:
+            raise ValueError("search_space conflicts with legacy param_grid")
+        if self.strategy is not None and self.strategy not in {
+            "grid", "random", "optuna", "experimental_surrogate_ranking",
+        }:
+            raise ValueError("strategy must be 'grid', 'random', 'optuna', or 'experimental_surrogate_ranking'")
+        if self.n_trials is not None and (not isinstance(self.n_trials, int) or self.n_trials < 1):
+            raise ValueError("n_trials must be a positive integer or None")
+        if self.resume not in {"auto", "must", "never"}:
+            raise ValueError("resume must be one of: 'auto', 'must', 'never'")
+
+        legacy_used = []
+        if self.param_grid is not None:
+            legacy_used.append("param_grid")
+        if self.random_search:
+            legacy_used.append("random_search")
+        if self.n_iter != 10:
+            legacy_used.append("n_iter")
+        if self.use_bayesian_optimization:
+            legacy_used.append("use_bayesian_optimization")
+        if self.bayesian_optimizer is not None:
+            legacy_used.append("bayesian_optimizer")
+        if self.checkpoint_path != "hyperphoenix_checkpoint.sqlite3":
+            legacy_used.append("checkpoint_path")
+        if self.clear_checkpoint:
+            legacy_used.append("clear_checkpoint")
+
+        self._resolved_search_space = self.search_space
+        self._resolved_param_grid = self.param_grid
+        self._resolved_strategy = self.strategy
+        self._resolved_n_trials = self.n_trials if self.n_trials is not None else self.n_iter
+        self._resolved_random_search = self.random_search
+        self._resolved_use_surrogate = self.use_bayesian_optimization
+        if self.search_space is not None:
+            self._resolved_param_grid = None
+        if self.strategy is None:
+            self._resolved_strategy = "random" if self.random_search else (
+                "experimental_surrogate_ranking" if self.use_bayesian_optimization else "grid"
+            )
+        if self._resolved_strategy == "random":
+            if self.random_search and self.n_trials is not None and self.n_iter != self.n_trials:
+                raise ValueError("n_trials conflicts with legacy n_iter")
+            self._resolved_random_search = True
+        if self._resolved_strategy == "grid" and self.n_trials is not None:
+            raise ValueError("n_trials is supported only with strategy='random' or strategy='optuna'")
+        if self._resolved_strategy == "experimental_surrogate_ranking":
+            self._resolved_use_surrogate = True
+            warnings.warn(
+                "experimental_surrogate_ranking is deprecated and will be removed in 0.6; use strategy='random' or 'optuna'.",
+                FutureWarning, stacklevel=3,
+            )
+        if self.clear_checkpoint:
+            warnings.warn(
+                "clear_checkpoint=True is deprecated and will be removed in 0.6; "
+                "call clear_checkpoint_file() explicitly before fit() instead.",
+                FutureWarning, stacklevel=3,
+            )
+        if self.strategy is not None and (self.random_search or self.use_bayesian_optimization or self.bayesian_optimizer is not None):
+            raise ValueError("strategy conflicts with legacy search settings")
+        if legacy_used:
+            warnings.warn(
+                "Legacy API arguments " + ", ".join(legacy_used) +
+                " are deprecated and will be removed in 0.6; use search_space, strategy, n_trials, storage_path, and resume.",
+                FutureWarning, stacklevel=3,
+            )
 
     def _worker_count(self) -> int:
         return self.trial_scheduler.worker_count()
@@ -459,12 +539,14 @@ class HyperPhoenixCV(BaseEstimator):
 
     def _strategy_identity_config(self) -> dict[str, object]:
         """Choices that alter proposal order or stopping semantics."""
+        if not hasattr(self, "_resolved_strategy"):
+            self._resolve_api_config()
         return {
-            "random_search": self.random_search,
-            "use_bayesian_optimization": self.use_bayesian_optimization,
-            "strategy": self.strategy,
-            "n_iter": self.n_iter,
-            "n_trials": self.n_trials,
+            "random_search": self._resolved_random_search,
+            "use_bayesian_optimization": self._resolved_use_surrogate,
+            "strategy": self._resolved_strategy,
+            "n_iter": self._resolved_n_trials,
+            "n_trials": self._resolved_n_trials,
             "optuna_warmup_trials": self.optuna_warmup_trials,
             "optuna_directions": dict(self.optuna_directions) if self.optuna_directions is not None else None,
             "early_stopping_patience": self.early_stopping_patience,
@@ -476,15 +558,19 @@ class HyperPhoenixCV(BaseEstimator):
 
     def _identity_search_space(self):
         """Stable identity projection for optional Optuna spaces."""
-        if self.search_space is None:
-            return self.param_grid
-        if callable(self.search_space):
+        if not hasattr(self, "_resolved_search_space"):
+            self._resolve_api_config()
+        if self._resolved_search_space is None:
+            return self._resolved_param_grid
+        if callable(self._resolved_search_space):
             if self.search_space_id is None:
                 raise ValueError(
                     "Callable search_space requires search_space_id for safe checkpoint resume"
                 )
             return {"optuna_callable": self.search_space_id}
-        return {str(name): repr(distribution) for name, distribution in self.search_space.items()}
+        if self._resolved_strategy in {"grid", "random", "experimental_surrogate_ranking"}:
+            return self._resolved_search_space
+        return {str(name): repr(distribution) for name, distribution in self._resolved_search_space.items()}
 
     def _fit_impl(self, X, y, groups=None, fit_params: dict | None = None):
         """
@@ -505,17 +591,11 @@ class HyperPhoenixCV(BaseEstimator):
             Returns the instance.
         """
         self._reset_fit_state()
+        self._resolve_api_config()
         self._validate_refit()
         self._validate_result_limit()
         self._validate_strategy()
         self._validate_scheduler()
-        if self.clear_checkpoint:
-            warnings.warn(
-                "clear_checkpoint=True is deprecated and will be removed in 0.6; "
-                "call clear_checkpoint_file() explicitly before fit() instead.",
-                FutureWarning,
-                stacklevel=2,
-            )
         if self.dataset_id is None:
             warnings.warn(
                 "dataset_id=None disables dataset-level checkpoint identity; pass a stable dataset_id for safe resume.",
@@ -559,7 +639,7 @@ class HyperPhoenixCV(BaseEstimator):
         # caller seed already has that property; for ``None`` allocate one once
         # and persist it before asking for any proposal.
         sampler_random_state = self.random_state
-        if self.random_search and sampler_random_state is None:
+        if self._resolved_random_search and sampler_random_state is None:
             state = self.study_store.study_state(self.study_id)
             sampler_random_state = state.get("sampler_random_state")
             if sampler_random_state is None:
@@ -573,7 +653,7 @@ class HyperPhoenixCV(BaseEstimator):
             existing_trials > self.max_cv_results or total_candidates > self.max_cv_results
         ):
             raise ValueError("callable refit requires full cv_results_; increase max_cv_results or set it to None")
-        adaptive_search = self.random_search or self.use_bayesian_optimization
+        adaptive_search = self._resolved_random_search or self._resolved_use_surrogate
         if self.early_stopping_patience is not None and not adaptive_search:
             warnings.warn(
                 "early_stopping_patience applies only to random or adaptive search; ignoring it for grid search.",
@@ -581,8 +661,8 @@ class HyperPhoenixCV(BaseEstimator):
             )
 
         spec = StudySpec(
-            scoring=tuple(self._scoring), strategy=self.strategy,
-            random_search=self.random_search, adaptive_search=adaptive_search,
+            scoring=tuple(self._scoring), strategy=self._resolved_strategy,
+            random_search=self._resolved_random_search, adaptive_search=adaptive_search,
             early_stopping_patience=self.early_stopping_patience,
             batch_size=self._worker_count() if self.parallelism == "trials" else 1,
             total_candidates=total_candidates,

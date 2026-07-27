@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — 0.5 API transition
+
+### Deprecated
+
+- `param_grid`, `random_search`, `n_iter`, `use_bayesian_optimization`,
+  `bayesian_optimizer`, and `checkpoint_path` now warn at fit time and will be
+  removed in 0.6. Use `search_space`, `strategy`, `n_trials`, `storage_path`,
+  and `resume`.
+- `experimental_surrogate_ranking` is compatibility-only, is not Bayesian
+  optimization, and will be removed in 0.6.
+
+### Changed
+
+- Grid, random, and Optuna strategies all accept canonical `search_space`.
+- Invalid/conflicting API configuration is rejected before SQLite is opened or
+  cleared.
+
 ## 0.4.3 — 2026-07-27
 
 ### Added

@@ -83,10 +83,19 @@ def create_search_strategy(
     optuna_warmup_trials: int = 10,
     optuna_directions: Mapping[str, str] | None = None,
 ) -> SearchStrategy:
-    """Build a strategy while preserving legacy configuration validation."""
+    """Build a strategy from canonical config or supported legacy aliases.
+
+    ``search_space`` is canonical for every strategy.  For grid and random it
+    has ``ParameterGrid``/``ParameterSampler`` syntax; for Optuna it has
+    Optuna distribution syntax.  ``param_grid`` remains a 0.5 compatibility
+    alias and is removed in 0.6.
+    """
     allowed = {"grid", "random", "optuna", "experimental_surrogate_ranking"}
     if strategy is not None and strategy not in allowed:
         raise ValueError("strategy must be 'grid', 'random', 'optuna', or 'experimental_surrogate_ranking'")
+    if search_space is not None and param_grid is not None:
+        raise ValueError("search_space conflicts with legacy param_grid")
+    space = search_space if search_space is not None else param_grid
     if strategy == "optuna":
         if random_search or use_bayesian_optimization or bayesian_optimizer is not None:
             raise ValueError("strategy='optuna' conflicts with legacy search settings")
@@ -97,10 +106,8 @@ def create_search_strategy(
             random_state=random_state, warmup_trials=optuna_warmup_trials,
             directions=optuna_directions,
         )
-    if search_space is not None:
-        raise ValueError("search_space is supported only with strategy='optuna'")
-    if param_grid is None:
-        raise ValueError("param_grid is required unless strategy='optuna'")
+    if space is None:
+        raise ValueError("search_space is required unless strategy='optuna'")
     if strategy == "random":
         if use_bayesian_optimization or bayesian_optimizer is not None:
             raise ValueError("strategy='random' conflicts with Bayesian compatibility settings")
@@ -122,8 +129,8 @@ def create_search_strategy(
             "use_bayesian_optimization is deprecated: current surrogate mode is not Bayesian optimization. "
             "Use random_search until the Optuna backend lands.", FutureWarning, stacklevel=2,
         )
-        return ExperimentalSurrogateRankingStrategy(param_grid=param_grid, scoring=scoring,
+        return ExperimentalSurrogateRankingStrategy(param_grid=space, scoring=scoring,
                                                      model=bayesian_optimizer, random_state=random_state)
     if random_search:
-        return RandomSearchStrategy(param_grid=param_grid, n_iter=n_iter, random_state=random_state)
-    return ExhaustiveSearchStrategy(param_grid=param_grid)
+        return RandomSearchStrategy(param_grid=space, n_iter=n_iter, random_state=random_state)
+    return ExhaustiveSearchStrategy(param_grid=space)
