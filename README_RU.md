@@ -55,6 +55,15 @@ sklearn `params`. При включённом routing настройте каж�
 или pipeline-step через sklearn `set_fit_request(...)`; иначе sklearn выдаст
 ошибку. Это стандартная семантика sklearn.
 
+### Руководства
+
+- [Resume identity и local storage](docs/resume_and_storage.md)
+- [Scalar/multi-objective refit](docs/refit_objectives.md)
+- [Честный Optuna pruning](docs/pruning.md)
+- [Parallelism/resource tuning](docs/parallelism.md)
+- [Audit exports и runtime events](docs/audit_and_events.md)
+- [API reference](docs/api_reference.md)
+
 ## 📖 Почему HyperPhoenixCV?
 
 Название **HyperPhoenixCV** отсылает к мифическому фениксу — птице, которая возрождается из пепла. Точно так же ваш поиск гиперпараметров может «возродиться» после прерывания, продолжая с последней сохранённой точки, а не начиная всё сначала.
@@ -130,17 +139,6 @@ hp.fit(X, y)  # Автоматически возобновляется из 'my
 ```
 
 SQLite — локальное хранилище для одного coordinator. Это не backend для общей файловой системы или нескольких узлов. `resume`: `"auto"` (по умолчанию), `"must"`, `"never"`; несовпадающий identity study отклоняется, результаты не смешиваются.
-
-### Миграция legacy pickle checkpoint
-
-Обычные `fit()` и resume никогда не распаковывают pickle. Один раз явно импортируйте старый checkpoint в SQLite study:
-
-```python
-report = hp.import_legacy_checkpoint("old_experiment.pkl", trusted=True)
-print(report)  # imported/skipped/failed и детали невалидных записей
-```
-
-**Предупреждение безопасности:** загрузка pickle/joblib может выполнить произвольный код. Указывайте `trusted=True` только для файла с проверенным происхождением и содержимым. Importer принимает legacy `List[dict]`, не меняет исходный файл и идемпотентен.
 
 ## 📚 Расширенное использование
 
@@ -370,20 +368,18 @@ hp.fit(X, y, groups=groups)
 - `memmap_max_nbytes`, `memmap_temp_folder`, `joblib_batch_size`: настройки
   joblib process backend; массивы больше default `"1M"` используют read-only memmap.
 - `pre_dispatch`: управляет количеством одновременно запускаемых jobs (по умолчанию='2*n_jobs').
-- `error_score`: значение, присваиваемое при ошибке (по умолчанию=np.nan).
+- `error_score`: `'raise'` или numeric значение при ошибке trial
+  (по умолчанию=`'raise'`).
 - `early_stopping_patience`: количество итераций без улучшений для досрочной остановки (по умолчанию=None, отключено).
-- `storage_path`: канонический путь к локальному SQLite store; pickle никогда
-  не используется для resume.
+- `storage_path`: канонический путь к локальному SQLite store.
 - `dataset_id`: стабильный идентификатор датасета. Нужен для сильной identity resume; `None` выдаёт warning.
 - `resume`: `"auto"` (по умолчанию), `"must"` или `"never"`.
 - `max_cv_results`: max trials в materialized `cv_results_` (по умолчанию=10,000);
   `None` включает unbounded projection.
 - `clear_storage()`: явно удалить SQLite storage перед `fit()`.
-- В 0.6 удалены legacy `param_grid`, `random_search`, `n_iter`,
-  `use_bayesian_optimization`, `bayesian_optimizer`, `checkpoint_path` и
-  `clear_checkpoint`. Подробнее: [migration 0.4 → 0.6](docs/migration_0.4_to_0.6.md).
-- `results_csv`: путь к CSV‑файлу для сохранения результатов (по умолчанию=None).
-- `verbose`: уровень детализации (по умолчанию=False).
+- `results_csv`: путь к CSV‑файлу для сохранения результатов
+  (по умолчанию=`"hyperphoenix_results.csv"`).
+- `verbose`: включить progress logging (по умолчанию=True).
 
 **Атрибуты после обучения**:
 
@@ -398,8 +394,6 @@ hp.fit(X, y, groups=groups)
 
 - `fit(X, y)`: запустить поиск; при разрешении возобновляет matching SQLite study.
 - `get_top_results(n=10)`: вернуть DataFrame с топ‑N кандидатами.
-- `load_results_from_checkpoint(n=10)`: прочитать top results из SQLite после прерывания.
-- `import_legacy_checkpoint(path, trusted=True)`: однократная trusted migration legacy pickle.
 - `clear_storage()`: явно удалить SQLite store.
 - `load_trial_history()`: открыть audit history matching existing study.
 
@@ -409,7 +403,19 @@ durability не проверены в CI для P0, поэтому Windows по�
 Backup, integrity check, WAL/SHM cleanup и recovery procedure: см.
 [local storage recovery](docs/storage_recovery.md).
 
-Полный список параметров и методов см. в исходном коде или используйте `help(HyperPhoenixCV)`.
+Полный список параметров и методов: [API reference](docs/api_reference.md) или
+`help(HyperPhoenixCV)`.
+
+## Безопасность и эксплуатация
+
+SQLite path — только local filesystem: не используйте network/shared/sync
+folders. Один active coordinator пишет один study. Для backup используйте
+`hyperphoenixcv-storage backup`, не ручное копирование DB/WAL; см.
+[storage recovery](docs/storage_recovery.md).
+
+Callbacks выполняются синхронно внутри процесса — это trusted application code.
+Default logging не содержит raw dataset, params и full traceback; не выводите
+секреты из custom callbacks.
 
 ## 🤝 Участие в разработке
 

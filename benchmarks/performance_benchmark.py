@@ -2,11 +2,11 @@
 
 Run a release record (five samples protects against a single noisy run)::
 
-    python benchmarks/p2_performance_benchmark.py --output benchmarks/p2_baseline.json
+    python benchmarks/performance_benchmark.py --output benchmarks/performance_baseline.json
 
 Compare a candidate with a recorded release::
 
-    python benchmarks/p2_performance_benchmark.py --baseline benchmarks/p2_baseline.json
+    python benchmarks/performance_benchmark.py --baseline benchmarks/performance_baseline.json
 
 The default resume sizes include 100,000 rows and can take several minutes on
 durable SQLite.  Use ``--resume-sizes 1000`` for a fast local smoke run.
@@ -292,7 +292,7 @@ def main() -> None:
     parser.add_argument("--runs", type=int, default=5)
     parser.add_argument("--resume-sizes", type=int, nargs="+", default=[1_000, 10_000, 100_000])
     parser.add_argument("--regression-threshold", type=float, default=0.15)
-    parser.add_argument("--profile", type=Path, default=Path("benchmarks/p2_profile.txt"))
+    parser.add_argument("--profile", type=Path, default=Path("benchmarks/performance_profile.txt"))
     args = parser.parse_args()
     if args.runs < 3:
         parser.error("--runs must be >= 3; a single noisy run is not a regression signal")

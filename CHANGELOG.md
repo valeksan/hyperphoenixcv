@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.2 — 2026-07-27
+
+- Documented engine architecture, safe resume identity, recovery, refit,
+  pruning, parallel resource tuning, audits, events, and public API.
+- Added README/API documentation release checks, core resume example coverage,
+  clean Optuna wheel smoke test, and wheel-content inspection.
+- Expanded security guidance for trusted pickle import, local SQLite paths, and
+  callback/logging boundaries.
+
 ## 0.6.1 — 2026-07-27
 
 - Hardened local SQLite storage with diagnosable error taxonomy.

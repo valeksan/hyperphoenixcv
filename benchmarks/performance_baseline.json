@@ -26,7 +26,7 @@
   },
   "profile": [
     {
-      "profile": "benchmarks/p2_profile.txt",
+      "profile": "benchmarks/performance_profile.txt",
       "top": [
         "        1    0.000    0.000    0.822    0.822 /home/vi/Projects/hyperphoenixcv/src/hyperphoenixcv/core.py:475(_fit_impl)",
         "        1    0.000    0.000    0.705    0.705 /home/vi/Projects/hyperphoenixcv/src/hyperphoenixcv/study_engine.py:90(run)",
@@ -42,7 +42,7 @@
         "       32    0.000    0.000    0.529    0.017 /home/vi/.local/lib/python3.12/site-packages/joblib/parallel.py:1888(_get_sequential_output)",
         "       16    0.002    0.000    0.509    0.032 /home/vi/.local/lib/python3.12/site-packages/sklearn/utils/parallel.py:140(__call__)",
         "       16    0.001    0.000    0.496    0.031 /home/vi/.local/lib/python3.12/site-packages/sklearn/model_selection/_validation.py:666(_fit_and_score)",
-        "       16    0.000    0.000    0.245    0.015 /home/vi/Projects/hyperphoenixcv/benchmarks/p2_performance_benchmark.py:64(fit)",
+        "       16    0.000    0.000    0.245    0.015 /home/vi/Projects/hyperphoenixcv/benchmarks/performance_benchmark.py:64(fit)",
         "       16    0.241    0.015    0.241    0.015 {built-in method time.sleep}",
         "       16    0.000    0.000    0.192    0.012 /home/vi/.local/lib/python3.12/site-packages/sklearn/model_selection/_validation.py:933(_score)",
         "       16    0.001    0.000    0.191    0.012 /home/vi/.local/lib/python3.12/site-packages/sklearn/metrics/_scorer.py:138(__call__)",
