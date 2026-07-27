@@ -149,8 +149,9 @@ jobs:
         python -m build
         python -m venv /tmp/hyperphoenixcv-optuna-wheel-env
         PYTHON=/tmp/hyperphoenixcv-optuna-wheel-env/bin/python
+        WHEEL=$(find dist -maxdepth 1 -name '*.whl' -print -quit)
         $PYTHON -m pip install --upgrade pip
-        $PYTHON -m pip install 'dist/*.whl[optuna]'
+        $PYTHON -m pip install "${WHEEL}[optuna]"
         $PYTHON - <<'PY'
         import tempfile
         from pathlib import Path
