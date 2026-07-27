@@ -23,6 +23,16 @@ HyperPhoenixCV is a smart hyperparameter tuning library that, like the mythical 
 - **⏱️ Early stopping** – Stop search early if no improvement for a given number of iterations (`early_stopping_patience`).
 - **📈 Best index attribute** – Access `best_index_` for compatibility with `GridSearchCV`.
 
+### Events and callbacks
+
+Pass `callbacks=[callback]`; each callback receives typed runtime events such
+as `StudyStarted`, `TrialCompleted`, `TrialFailed`, and `StudyCompleted`.
+Callbacks run synchronously in coordinator process after each terminal trial
+commit. Callback exceptions fail `fit` (fail-fast). Events are runtime-only:
+they are not stored in SQLite and are not replayed on resume. `verbose=True`
+uses standard `logging` progress events; configure Python logging to display
+them. Default logs omit datasets, parameter values, and tracebacks.
+
 ## 🚀 Installation
 
 Install from PyPI:

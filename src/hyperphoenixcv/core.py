@@ -10,6 +10,7 @@ an optional Optuna backend, and experimental surrogate-ranking compatibility.
 
 import warnings
 import secrets
+import logging
 from pathlib import Path
 from collections.abc import Mapping
 import numpy as np
@@ -26,6 +27,10 @@ from .study_identity import StudyIdentity
 from .storage import SQLiteStudyStore
 from .study_engine import StudyEngine, StudySpec
 from .scheduler import SchedulerSpec, TrialScheduler
+from .events import EventPublisher, ExportFailed, RefitFailed, StudyCallback, TrialCompleted, TrialFailed, TrialPruned, TrialCancelled
+
+
+logger = logging.getLogger(__name__)
 
 
 def _early_stop_from_results(results: list[dict], metric: str) -> tuple[float, int]:
@@ -78,12 +83,12 @@ class HyperPhoenixCV(BaseEstimator):
     hp.fit(X, y)  # Will continue from the last saved point!
 
     # Get results
-    print("Best parameters:", hp.best_params_)
-    print("Best score:", hp.best_score_)
+    best_params = hp.best_params_
+    best_score = hp.best_score_
 
     # Top-10 results
     top_10 = hp.get_top_results(10)
-    print(top_10)
+    top_10
 
     # Manually delete checkpoint
     hp.clear_checkpoint_file()
@@ -128,6 +133,7 @@ class HyperPhoenixCV(BaseEstimator):
         memmap_max_nbytes: int | str | None = "1M",
         memmap_temp_folder: str | None = None,
         joblib_batch_size: int | str = "auto",
+        callbacks: list[StudyCallback] | tuple[StudyCallback, ...] | None = None,
     ):
         """
         Initializes HyperPhoenixCV.
@@ -215,6 +221,7 @@ class HyperPhoenixCV(BaseEstimator):
         self.memmap_max_nbytes = memmap_max_nbytes
         self.memmap_temp_folder = memmap_temp_folder
         self.joblib_batch_size = joblib_batch_size
+        self.callbacks = callbacks
 
     @property
     def _scoring(self):
@@ -315,6 +322,15 @@ class HyperPhoenixCV(BaseEstimator):
         ))
         if self.cancel_callback is not None and not callable(self.cancel_callback):
             raise ValueError("cancel_callback must be callable or None")
+        if self.callbacks is not None and (not isinstance(self.callbacks, (list, tuple)) or not all(callable(item) for item in self.callbacks)):
+            raise TypeError("callbacks must be a list or tuple of callables, or None")
+
+    def _progress_callback(self, event) -> None:
+        """Legacy verbose output through logging; omit params/data/tracebacks."""
+        if isinstance(event, (TrialCompleted, TrialFailed, TrialPruned, TrialCancelled)):
+            logger.info("trial %s: %s", event.trial_index, type(event).__name__)
+        else:
+            logger.info("%s", type(event).__name__)
 
     def _update_study_state(self, patch: dict) -> None:
         state = self.study_store.study_state(self.study_id)
@@ -529,22 +545,12 @@ class HyperPhoenixCV(BaseEstimator):
 
         total_candidates = self.search_strategy.total_candidates()
         completed_keys = self.study_store.completed_param_keys(self.study_id)
-        if self.verbose:
-            print(f"Total combinations: {total_candidates}")
-            print(f"Completed trials: {len(completed_keys)}")
         adaptive_search = self.random_search or self.use_bayesian_optimization
         if self.early_stopping_patience is not None and not adaptive_search:
             warnings.warn(
                 "early_stopping_patience applies only to random or adaptive search; ignoring it for grid search.",
                 UserWarning, stacklevel=2,
             )
-
-        def on_trial(index, params, result):
-            if not self.verbose:
-                return
-            print(f"\n[{index}/{total_candidates}] Testing: {params}")
-            if "error" not in result:
-                print(f"Saved. Current: {self._format_metric_string(result)} | Best: {self._compute_best_metrics()}")
 
         spec = StudySpec(
             scoring=tuple(self._scoring), strategy=self.strategy,
@@ -556,16 +562,24 @@ class HyperPhoenixCV(BaseEstimator):
             cancel_callback=self.cancel_callback,
             timeout_enabled=self.trial_timeout is not None,
         )
+        callbacks = tuple(self.callbacks or ())
+        if self.verbose:
+            callbacks = (*callbacks, self._progress_callback)
+        self.event_publisher = EventPublisher(callbacks)
         self.study_engine = StudyEngine(
             spec=spec, store=self.study_store, study_id=self.study_id,
             strategy=self.search_strategy, result_manager=self.result_manager,
             evaluate_batch=lambda proposals: self._evaluate_batch(proposals, X, y, groups, fit_params),
-            on_trial=on_trial,
+            event_publisher=self.event_publisher,
         )
         self.study_engine.run(checkpoint_results)
 
         # Save results to CSV
-        self.result_manager.save_to_csv()
+        try:
+            self.result_manager.save_to_csv()
+        except Exception as exc:
+            self.event_publisher.emit(ExportFailed(self.study_id, self.results_csv, type(exc).__name__, str(exc)))
+            raise
 
         # Update attributes for compatibility with GridSearchCV
         self.cv_results_ = self.result_manager.format_cv_results()
@@ -574,17 +588,12 @@ class HyperPhoenixCV(BaseEstimator):
 
         # Refit the best estimator on the whole dataset
         if self.refit and hasattr(self, "best_params_") and self.best_params_:
-            self.best_estimator_ = clone(self.estimator).set_params(**self.best_params_)
-            self.best_estimator_.fit(X, y, **(fit_params or {}))
-
-        if self.verbose:
-            print(f"\nAll results saved to {self.results_csv}")
-            if hasattr(self, "best_score_"):
-                print(f"Best result ({self._scoring[0]}): {self.best_score_:.4f}")
-            if self.random_search:
-                print(
-                    f"Random search used: {total_candidates} candidates."
-                )
+            try:
+                self.best_estimator_ = clone(self.estimator).set_params(**self.best_params_)
+                self.best_estimator_.fit(X, y, **(fit_params or {}))
+            except Exception as exc:
+                self.event_publisher.emit(RefitFailed(self.study_id, type(exc).__name__, str(exc)))
+                raise
 
         return self
 

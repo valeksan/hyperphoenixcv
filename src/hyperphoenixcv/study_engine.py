@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .storage.protocols import StudyStore
+from .events import (
+    EventPublisher, StudyCompleted, StudyResumed, StudyStarted, StudyStopped,
+    TrialCancelled, TrialCompleted, TrialFailed, TrialPruned, TrialStarted,
+)
 
 
 @dataclass(frozen=True)
@@ -62,6 +66,7 @@ class StudyEngine:
         result_manager: Any,
         evaluate_batch: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
         on_trial: Callable[[int, dict[str, Any], dict[str, Any]], None] | None = None,
+        event_publisher: EventPublisher | None = None,
     ) -> None:
         self.spec = spec
         self.store = store
@@ -70,6 +75,7 @@ class StudyEngine:
         self.result_manager = result_manager
         self.evaluate_batch = evaluate_batch
         self.on_trial = on_trial
+        self.event_publisher = event_publisher or EventPublisher()
 
     def _update_state(self, patch: dict[str, Any]) -> None:
         state = self.store.study_state(self.study_id)
@@ -79,6 +85,9 @@ class StudyEngine:
     def run(self, checkpoint_results: list[dict[str, Any]]) -> StudyRun:
         """Run until exhausted, cancelled, or early-stopping condition fires."""
         self.strategy.restore(checkpoint_results)
+        self.event_publisher.emit(StudyStarted(self.study_id, self.spec.total_candidates))
+        if checkpoint_results:
+            self.event_publisher.emit(StudyResumed(self.study_id, len(checkpoint_results)))
         early_enabled = self.spec.early_stopping_patience is not None and self.spec.adaptive_search
         primary_metric = self.spec.scoring[0]
         best_score, no_improvement_count = _early_stop_from_results(checkpoint_results, primary_metric)
@@ -105,6 +114,8 @@ class StudyEngine:
             proposals = self.strategy.ask(batch_size)
             if not proposals:
                 break
+            for offset, params in enumerate(proposals, 1):
+                self.event_publisher.emit(TrialStarted(self.study_id, attempts + offset, params))
             for params, result in zip(proposals, self.evaluate_batch(proposals)):
                 attempts += 1
                 metadata_fn = getattr(self.strategy, "result_metadata", None)
@@ -130,6 +141,19 @@ class StudyEngine:
                     }})
                 if self.on_trial is not None:
                     self.on_trial(attempts, params, result)
+                state = result.get("trial_state")
+                if state == "pruned":
+                    self.event_publisher.emit(TrialPruned(self.study_id, attempts, params, result))
+                elif state == "cancelled" or result.get("cancellation_reason"):
+                    self.event_publisher.emit(TrialCancelled(
+                        self.study_id, attempts, params, result.get("cancellation_reason")
+                    ))
+                elif "error" in result:
+                    self.event_publisher.emit(TrialFailed(
+                        self.study_id, attempts, params, result.get("error_type"), result.get("error")
+                    ))
+                else:
+                    self.event_publisher.emit(TrialCompleted(self.study_id, attempts, params, result))
                 if early_enabled:
                     if "error" not in result:
                         score = result.get(f"mean_test_{primary_metric}", -float("inf"))
@@ -151,4 +175,8 @@ class StudyEngine:
                     }})
                     if not proposals_available:
                         break
+        if stopped_reason is not None and stopped_reason != "cancel_callback":
+            self.event_publisher.emit(StudyStopped(self.study_id, stopped_reason))
+        elif stopped_reason is None:
+            self.event_publisher.emit(StudyCompleted(self.study_id, len(self.result_manager.results)))
         return StudyRun(stopped_reason=stopped_reason, attempts=attempts)

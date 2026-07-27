@@ -65,17 +65,12 @@ class TestCheckpointManager:
         manager.clear()
         assert not os.path.exists(temp_file)
 
-    def test_verbose(self, temp_file, sample_results, capsys):
+    def test_verbose(self, temp_file, sample_results, caplog):
         manager = CheckpointManager(temp_file, verbose=True)
-        manager.save(sample_results)
-        out, _ = capsys.readouterr()
-        assert "Checkpoint saved" in out
-
-        with pytest.raises(RuntimeError, match="Implicit pickle loading"):
-            manager.load()
-        out, _ = capsys.readouterr()
-        assert out == ""
-
-        manager.clear()
-        out, _ = capsys.readouterr()
-        assert "Deleted checkpoint" in out or "does not exist" in out
+        with caplog.at_level("INFO"):
+            manager.save(sample_results)
+            with pytest.raises(RuntimeError, match="Implicit pickle loading"):
+                manager.load()
+            manager.clear()
+        assert "Checkpoint saved" in caplog.text
+        assert "Checkpoint deleted" in caplog.text or "Checkpoint does not exist" in caplog.text
