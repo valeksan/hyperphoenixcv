@@ -4,7 +4,6 @@ import pytest
 from sklearn.base import clone
 from sklearn.exceptions import NotFittedError
 from sklearn.linear_model import LogisticRegression
-from sklearn.utils.estimator_checks import check_estimator_cloneable, check_get_params_invariance
 
 from hyperphoenixcv import HyperPhoenixCV
 
@@ -57,8 +56,16 @@ def test_sklearn_clone_and_get_params_preserve_constructor_values():
 
 def test_applicable_sklearn_estimator_parameter_checks():
     search = make_search(scoring="accuracy")
-    check_estimator_cloneable("HyperPhoenixCV", search)
-    check_get_params_invariance("HyperPhoenixCV", search)
+    # Keep checks compatible with minimum sklearn 1.4. Newer private helpers
+    # (for example check_estimator_cloneable) are not exported there.
+    params_before = search.get_params(deep=False)
+    cloned = clone(search)
+    assert cloned is not search
+    params_after = cloned.get_params(deep=False)
+    estimator = params_before["estimator"]
+    cloned_estimator = params_after.pop("estimator")
+    assert params_after == {key: value for key, value in params_before.items() if key != "estimator"}
+    assert cloned_estimator is not estimator
 
 
 def test_predict_before_fit_raises_not_fitted_error():
