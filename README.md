@@ -55,6 +55,16 @@ Python 3.10–3.12 on Linux. Minimum dependencies: NumPy 1.21.6, pandas 1.5,
 joblib 1.3, and scikit-learn 1.4. Optuna 3.0+ is optional. Windows and macOS
 are not supported targets until durability CI coverage exists.
 
+### Metadata routing
+
+HyperPhoenixCV supports scikit-learn 1.4+ with metadata routing either enabled
+or disabled. Pass CV groups as `fit(X, y, groups=groups)`. They are consumed
+once to resolve splits and are not also sent to `cross_validate`. Other fit
+metadata, such as `sample_weight`, is passed once through sklearn's `params`
+path. With routing enabled, configure every receiving estimator/pipeline step
+with sklearn's `set_fit_request(...)`; sklearn raises for metadata no step
+requests. This matches sklearn routing rules.
+
 ## 📖 Why HyperPhoenixCV?
 
 The name **HyperPhoenixCV** refers to the mythical phoenix – a bird that rises from its ashes. In the same way, your hyperparameter search can "rise again" after an interruption, continuing from the last saved checkpoint instead of starting over from scratch.

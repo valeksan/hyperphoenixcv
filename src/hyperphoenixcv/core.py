@@ -416,7 +416,11 @@ class HyperPhoenixCV(BaseEstimator):
         str
             Formatted string like "f1: 0.92 | accuracy: 0.95"
         """
-        valid_results = [r for r in self.result_manager.results if 'error' not in r]
+        valid_results = [
+            result for result in self.result_manager.results
+            if result.get("trial_state", "completed") == "completed"
+            and "error" not in result
+        ]
         if not valid_results:
             return ""
 
@@ -637,7 +641,11 @@ class HyperPhoenixCV(BaseEstimator):
             self.best_score_ = best_value
             self.best_index_ = best_index
             return
-        valid_results = [r for r in self.result_manager.results if 'error' not in r]
+        valid_results = [
+            result for result in self.result_manager.results
+            if result.get("trial_state", "completed") == "completed"
+            and "error" not in result
+        ]
         if not valid_results:
             return
 
@@ -654,6 +662,12 @@ class HyperPhoenixCV(BaseEstimator):
             metric = self.refit if isinstance(self.refit, str) else self._scoring[0]
             scoring_key = f'mean_test_{metric}'
             direction = self._metric_directions()[metric]
+            valid_results = [
+                result for result in valid_results
+                if scoring_key in result and not pd.isna(result[scoring_key])
+            ]
+            if not valid_results:
+                return
             sentinel = float("-inf") if direction == "maximize" else float("inf")
             best_result = (
                 max if direction == "maximize" else min

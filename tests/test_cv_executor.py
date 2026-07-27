@@ -4,12 +4,27 @@ Unit tests for CVExecutor.
 
 import numpy as np
 import pytest
+from sklearn import config_context
+from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.linear_model import LogisticRegression
 from sklearn.datasets import make_classification
-from sklearn.model_selection import KFold, StratifiedKFold, check_cv
+from sklearn.model_selection import GroupKFold, KFold, StratifiedKFold, check_cv
 from sklearn.metrics import accuracy_score, make_scorer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 from src.hyperphoenixcv.cv_executor import CVExecutor
+
+
+class _OneFoldFailureClassifier(ClassifierMixin, BaseEstimator):
+    def fit(self, X, y):
+        if np.min(X[:, 0]) < 0:
+            raise ValueError("intentional fold failure")
+        self.classes_ = np.unique(y)
+        return self
+
+    def predict(self, X):
+        return np.zeros(len(X), dtype=int)
 
 
 class TestCVExecutor:
@@ -181,6 +196,53 @@ class TestCVExecutor:
         assert 'error' in result
         assert np.isnan(result['mean_test_accuracy'])
         assert len(result['fold_errors']) == 2
+
+    @pytest.mark.parametrize("routing", [False, True])
+    def test_groups_work_with_pipeline_when_metadata_routing_changes(self, data, routing):
+        X, y = data
+        groups = np.repeat(np.arange(10), 5)
+        pipeline = Pipeline([
+            ("scale", StandardScaler()),
+            ("model", LogisticRegression(max_iter=200)),
+        ])
+        with config_context(enable_metadata_routing=routing):
+            result = CVExecutor(cv=GroupKFold(2), scoring="accuracy", verbose=False).evaluate(
+                pipeline, X, y, {}, groups=groups
+            )
+        assert len(result["scores_accuracy"]) == 2
+
+    def test_enabled_metadata_routing_routes_sample_weight_once(self, data):
+        X, y = data
+        groups = np.repeat(np.arange(10), 5)
+        pipeline = Pipeline([
+            ("scale", StandardScaler()),
+            ("model", LogisticRegression(max_iter=200)),
+        ])
+        scorer = make_scorer(accuracy_score)
+        with config_context(enable_metadata_routing=True):
+            pipeline.named_steps["scale"].set_fit_request(sample_weight=False)
+            pipeline.named_steps["model"].set_fit_request(sample_weight=True)
+            scorer.set_score_request(sample_weight=False)
+            result = CVExecutor(cv=GroupKFold(2), scoring=scorer, verbose=False).evaluate(
+                pipeline, X, y, {}, groups=groups,
+                fit_params={"sample_weight": np.ones(len(y))},
+            )
+        assert len(result["scores_score"]) == 2
+
+    @pytest.mark.parametrize("error_score, expected_mean", [(0.0, 0.5), (np.nan, np.nan)])
+    def test_partial_fold_failure_uses_numeric_error_score(self, error_score, expected_mean):
+        X = np.array([[-1.0], [1.0], [2.0], [3.0]])
+        y = np.zeros(4, dtype=int)
+        splits = [(np.array([0, 1]), np.array([2, 3])), (np.array([2, 3]), np.array([0, 1]))]
+        with pytest.warns():
+            result = CVExecutor(cv=splits, scoring="accuracy", error_score=error_score, verbose=False).evaluate(
+                _OneFoldFailureClassifier(), X, y, {}
+            )
+        assert result["scores_accuracy"][0] == error_score or np.isnan(result["scores_accuracy"][0])
+        if np.isnan(expected_mean):
+            assert np.isnan(result["mean_test_accuracy"])
+        else:
+            assert result["mean_test_accuracy"] == pytest.approx(expected_mean)
 
     def test_result_includes_fold_timings(self, data, estimator):
         X, y = data
