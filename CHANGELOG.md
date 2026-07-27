@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.4.3 — 2026-07-27
+
+### Added
+
+- Runtime study events and public callbacks for lifecycle, trial, export, and
+  refit outcomes; callback failures are deterministic and fail fast.
+- Durable, read-only `TrialHistory` audit access with pagination, streaming,
+  lossless JSON export, flat CSV export, and optional Parquet export.
+- Native Optuna search support, including scalar cooperative pruning and
+  multi-objective directions/Pareto projection.
+- Trial/fold scheduling controls, runtime serialization coverage, and expanded
+  CI compatibility, wheel-smoke, and release checks.
+
+### Changed
+
+- SQLite remains the terminal-trial source of truth; checkpoint restore and
+  audit access now stream records instead of retaining result dictionaries.
+- `cv_results_` materialization is bounded by `max_cv_results=10_000` by
+  default. Large studies retain paginated audit history, best-refit, and top-N
+  access without unbounded sklearn projection memory.
+- Metric directions support both maximize and minimize ranking outside Optuna.
+- Documentation now covers local-only SQLite policy, events, audit exports,
+  Optuna workflows, and TestPyPI installation.
+
+### Fixed
+
+- Audit JSON export preserves terminal failed/pruned/cancelled states,
+  diagnostics, objectives, exceptions, tuples, sets, and non-finite floats.
+- Callable refit validates indexes against complete materialized
+  `cv_results_`, including failed rows.
+
 ## 0.4.2 — 2026-07-27
 
 ### Changed
