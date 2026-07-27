@@ -12,7 +12,7 @@ from hyperphoenixcv.storage.sqlite_store import SQLiteStudyStore, StudyMismatchE
 def make_identity(**overrides):
     config = {
         "estimator": LogisticRegression(C=1.0),
-        "param_grid": {"C": [0.1, 1.0], "solver": ["lbfgs"]},
+        "search_space": {"C": [0.1, 1.0], "solver": ["lbfgs"]},
         "scoring": "accuracy",
         "cv": 2,
         "random_state": 7,
@@ -25,8 +25,8 @@ def make_identity(**overrides):
 
 
 def test_identity_is_stable_when_grid_dict_order_changes():
-    first = make_identity(param_grid={"C": [0.1, 1.0], "solver": ["lbfgs"]})
-    second = make_identity(param_grid={"solver": ["lbfgs"], "C": [0.1, 1.0]})
+    first = make_identity(search_space={"C": [0.1, 1.0], "solver": ["lbfgs"]})
+    second = make_identity(search_space={"solver": ["lbfgs"], "C": [0.1, 1.0]})
 
     assert first.space_digest == second.space_digest
     assert first.config_digest == second.config_digest
@@ -52,7 +52,7 @@ def test_identity_changes_when_strategy_or_budget_changes():
     ("change", "field"),
     [
         ({"estimator": LogisticRegression(C=0.5)}, "estimator_digest"),
-        ({"param_grid": {"C": [0.2]}}, "space_digest"),
+        ({"search_space": {"C": [0.2]}}, "space_digest"),
         ({"scoring": "f1"}, "scorer_digest"),
         ({"cv": 3}, "cv_digest"),
         ({"dataset_id": "train-v2"}, "dataset_id"),

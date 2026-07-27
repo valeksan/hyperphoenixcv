@@ -34,14 +34,13 @@ if os.path.exists(storage_file):
 
 tuner = HyperPhoenixCV(
     estimator=RandomForestClassifier(random_state=42),
-    param_grid=param_grid,
+    search_space=param_grid,
     scoring='accuracy',
     cv=3,
     n_jobs=1,
     verbose=1,
-    checkpoint_path=storage_file,
+    storage_path=storage_file,
     dataset_id="verify-library-synthetic-v1",
-    clear_checkpoint=False,
     refit=True
 )
 

@@ -23,10 +23,10 @@ def test_second_fit_does_not_duplicate_checkpoint_results(tmp_path):
     estimator = LogisticRegression(max_iter=100)
     search = HyperPhoenixCV(
         estimator=estimator,
-        param_grid={"C": [0.5, 1.0]},
+        search_space={"C": [0.5, 1.0]},
         scoring="accuracy",
         cv=2,
-        checkpoint_path=str(tmp_path / "checkpoint.pkl"),
+        storage_path=str(tmp_path / "checkpoint.pkl"),
         results_csv=str(tmp_path / "results.csv"),
         verbose=False,
     )

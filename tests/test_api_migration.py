@@ -26,6 +26,10 @@ def test_canonical_signature_clone_get_and_set_params(tmp_path):
     search = _canonical(tmp_path)
     signature = inspect.signature(HyperPhoenixCV)
     assert {"search_space", "strategy", "n_trials", "storage_path", "resume"} <= set(signature.parameters)
+    assert not {
+        "param_grid", "random_search", "n_iter", "use_bayesian_optimization",
+        "bayesian_optimizer", "checkpoint_path", "clear_checkpoint",
+    } & set(signature.parameters)
     cloned = clone(search)
     assert cloned.get_params(deep=False)["search_space"] == {"C": [0.1, 1.0]}
     assert cloned.get_params(deep=False)["storage_path"].endswith("study.sqlite3")
@@ -47,9 +51,18 @@ def test_canonical_random_uses_n_trials(tmp_path):
     assert len(search.cv_results_["params"]) == 1
 
 
-def test_canonical_and_legacy_spaces_conflict_before_storage(tmp_path):
+def test_invalid_canonical_config_fails_before_storage(tmp_path):
     path = tmp_path / "study.sqlite3"
-    search = _canonical(tmp_path, param_grid={"C": [1.0]})
-    with pytest.raises(ValueError, match="conflicts"):
+    search = _canonical(tmp_path, strategy="random", n_trials=None)
+    with pytest.raises(ValueError, match="require n_trials"):
         search.fit([[0], [1], [2], [3]], [0, 0, 1, 1])
+    assert not path.exists()
+
+
+def test_clear_storage_is_explicit(tmp_path):
+    search = _canonical(tmp_path)
+    search.fit([[0], [1], [2], [3]], [0, 0, 1, 1])
+    path = tmp_path / "study.sqlite3"
+    assert path.exists()
+    search.clear_storage()
     assert not path.exists()

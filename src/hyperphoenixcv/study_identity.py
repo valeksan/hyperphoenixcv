@@ -11,7 +11,7 @@ from uuid import uuid4
 
 
 SCHEMA_VERSION = 1
-LIBRARY_VERSION = "0.5.0"
+LIBRARY_VERSION = "0.6.0"
 
 
 class UnsupportedIdentityValueError(ValueError):
@@ -121,7 +121,7 @@ class StudyIdentity:
         cls,
         *,
         estimator: Any,
-        param_grid: Any,
+        search_space: Any,
         scoring: Any,
         cv: Any,
         random_state: int | None,
@@ -133,7 +133,7 @@ class StudyIdentity:
         values = {
             "dataset_id": dataset_id,
             "estimator_digest": digest(canonicalize(estimator)),
-            "space_digest": digest(canonicalize(param_grid)),
+            "space_digest": digest(canonicalize(search_space)),
             "cv_digest": digest(_cv_config(cv, cv_id)),
             "scorer_digest": digest(_scorer_config(scoring, scorer_id)),
             "seed": random_state,

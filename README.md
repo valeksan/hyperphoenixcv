@@ -144,10 +144,8 @@ print(report)  # imported/skipped/failed counts and invalid-record details
 
 ## 📚 Advanced Usage
 
-### Deprecated surrogate ranking
+### Search strategies
 
-`use_bayesian_optimization=True` remains temporary compatibility API only. It
-does **not** implement Bayesian optimization; do not use it for adaptive search.
 Use seeded random search, or genuine Optuna ask/tell:
 
 ```python
@@ -365,13 +363,10 @@ Main class for hyperparameter search.
 - `resume`: `"auto"` (default), `"must"`, or `"never"`.
 - `max_cv_results`: max trials materialized in `cv_results_` (default=10,000);
   `None` opts into unbounded projection.
-- `clear_checkpoint=True`: deprecated; call `clear_checkpoint_file()` before
-  `fit()` instead. It will be removed in 0.6.
-- Legacy `param_grid`, `random_search`, `n_iter`,
-  `use_bayesian_optimization`, `bayesian_optimizer`, and `checkpoint_path`
-  emit `FutureWarning` in 0.5 and are removed in 0.6. Use `search_space`,
-  `strategy`, `n_trials`, `storage_path`, and `resume` instead.
-  See [0.4 to 0.6 migration](docs/migration_0.4_to_0.6.md).
+- `clear_storage()`: explicitly delete SQLite study storage before `fit()`.
+- 0.6 removes legacy `param_grid`, `random_search`, `n_iter`,
+  `use_bayesian_optimization`, `bayesian_optimizer`, `checkpoint_path`, and
+  `clear_checkpoint`. See [0.4 to 0.6 migration](docs/migration_0.4_to_0.6.md).
 - `results_csv`: path to CSV file for saving results (default=None).
 - `verbose`: verbosity level (default=False).
 
@@ -390,7 +385,7 @@ Main class for hyperparameter search.
 - `get_top_results(n=10)`: return a DataFrame with top‑N candidates.
 - `load_results_from_checkpoint(n=10)`: read top results from SQLite after interruption.
 - `import_legacy_checkpoint(path, trusted=True)`: one-time trusted legacy pickle migration.
-- `clear_checkpoint_file()`: delete SQLite store explicitly.
+- `clear_storage()`: delete SQLite store explicitly.
 - `load_trial_history()`: open audit history for an existing matching study.
 
 SQLite storage is supported only on a local filesystem. Windows locking and

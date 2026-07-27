@@ -9,10 +9,9 @@ from hyperphoenixcv.legacy_pickle import LegacyCheckpointError, LegacyCheckpoint
 def make_search(tmp_path):
     return HyperPhoenixCV(
         estimator=LogisticRegression(),
-        param_grid={"C": [0.1, 1.0]},
+        search_space={"C": [0.1, 1.0]},
         scoring="accuracy",
         cv=2,
-        checkpoint_path=str(tmp_path / "old_checkpoint.pkl"),
         storage_path=str(tmp_path / "study.sqlite3"),
         dataset_id="legacy-import-v1",
         verbose=False,

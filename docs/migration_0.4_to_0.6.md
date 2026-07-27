@@ -15,7 +15,7 @@ before `fit()`.
 | Optuna | `param_grid=None`, `strategy="optuna"` | `search_space`, `strategy="optuna"`, `n_trials=N` | Legacy flags/model: error |
 | SQLite path | `checkpoint_path` | `storage_path` | Use only `storage_path`; it takes precedence during 0.5 |
 | Resume | implicit same path | `resume="auto"`, `"must"`, or `"never"` | Invalid mode: error |
-| Clear study | `clear_checkpoint=True` | `clear_checkpoint_file()` before `fit()` | Legacy flag removed in 0.6 |
+| Clear study | `clear_checkpoint=True` | `clear_storage()` before `fit()` | Legacy flag removed in 0.6 |
 | Surrogate ranking | `use_bayesian_optimization`, `bayesian_optimizer` | Random or Optuna | Deprecated; removed in 0.6 |
 
 `experimental_surrogate_ranking` is compatibility-only. It is not Bayesian

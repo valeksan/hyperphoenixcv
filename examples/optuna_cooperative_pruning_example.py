@@ -23,7 +23,6 @@ def evaluator(estimator, X, y, params, report, groups, fit_params):
 X, y = load_breast_cancer(return_X_y=True)
 search = HyperPhoenixCV(
     estimator=SGDClassifier(random_state=42),
-    param_grid=None,
     strategy="optuna",
     search_space={"alpha": optuna.distributions.FloatDistribution(1e-6, 1e-2, log=True)},
     n_trials=20,

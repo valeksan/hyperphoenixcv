@@ -11,4 +11,4 @@ __all__ = [
     'TrialCompleted', 'TrialFailed', 'TrialPruned', 'TrialCancelled',
     'StudyStopped', 'StudyCompleted', 'ExportFailed', 'RefitFailed', 'TrialHistory',
 ]
-__version__ = '0.5.0'
+__version__ = '0.6.0'

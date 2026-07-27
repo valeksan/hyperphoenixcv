@@ -3,7 +3,7 @@ Example of HyperPhoenixCV with random search for efficient hyperparameter tuning
 
 This example demonstrates:
 - Using random search instead of full grid search
-- Setting n_iter to control the number of combinations
+- Setting n_trials to control the number of combinations
 - How random search can find good parameters faster than full grid search
 - Getting results from random search
 """
@@ -52,14 +52,14 @@ print("Random search will test only a small fraction of them.\n")
 print("Configuring HyperPhoenixCV with random search...")
 hp = HyperPhoenixCV(
     estimator=pipeline,
-    param_grid=param_grid,
+    search_space=param_grid,
     scoring='f1',
     cv=5,
     n_jobs=-1,
-    random_search=True,  # Enable random search
-    n_iter=50,           # Number of random combinations to test
+    strategy="random",  # Enable random search
+    n_trials=50,           # Number of random combinations to test
     random_state=42,     # For reproducibility
-    checkpoint_path="random_search_checkpoint.sqlite3",
+    storage_path="random_search_checkpoint.sqlite3",
     dataset_id="20newsgroups-atheism-graphics-train-v1",
     results_csv="random_search_results.csv",
     verbose=True
@@ -73,8 +73,8 @@ hp.fit(X, y)
 print("\n" + "="*50)
 print("RANDOM SEARCH RESULTS")
 print("="*50)
-print(f"Tested {hp.n_iter} random combinations out of {total_combinations} possible")
-print(f"That's only {hp.n_iter/total_combinations*100:.4f}% of exhaustive search!")
+print(f"Tested {hp.n_trials} random combinations out of {total_combinations} possible")
+print(f"That's only {hp.n_trials/total_combinations*100:.4f}% of exhaustive search!")
 print("\nBest parameters:", hp.best_params_)
 print("Best f1 score:", hp.best_score_)
 
@@ -84,7 +84,7 @@ print("\nTop-5 results:")
 print(top_5)
 
 # Compare with theoretical full grid search time
-estimated_full_grid_time = hp.n_iter / total_combinations * 100 * 2  # Assume 2 minutes per combination
+estimated_full_grid_time = hp.n_trials / total_combinations * 100 * 2  # Assume 2 minutes per combination
 if estimated_full_grid_time > 60:
     hours = estimated_full_grid_time / 60
     time_str = f"{hours:.1f} hours"
@@ -95,11 +95,11 @@ print("\n" + "="*50)
 print(f"TIME SAVINGS")
 print("="*50)
 print(f"Exhaustive search of all combinations would take approximately {time_str}")
-print(f"Random search completed in {hp.n_iter} combinations and found good parameters!")
+print(f"Random search completed in {hp.n_trials} combinations and found good parameters!")
 print("="*50)
 
 # Clean up checkpoints after successful run
-hp.clear_checkpoint_file()
+hp.clear_storage()
 print("\nSQLite study store successfully deleted.")
 
 # Tip for users

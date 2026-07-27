@@ -20,12 +20,12 @@ class SimulatedCrash(BaseException):
 def make_search(tmp_path: Path, *, refit: bool = True) -> HyperPhoenixCV:
     return HyperPhoenixCV(
         estimator=LogisticRegression(max_iter=100),
-        param_grid={"C": [0.1, 1.0, 10.0]},
+        search_space={"C": [0.1, 1.0, 10.0]},
         scoring="accuracy",
         cv=2,
         random_state=7,
         dataset_id="crash-recovery-v1",
-        checkpoint_path=str(tmp_path / "checkpoint.pkl"),
+        storage_path=str(tmp_path / "checkpoint.pkl"),
         results_csv=str(tmp_path / "results.csv"),
         verbose=False,
         refit=refit,
@@ -122,10 +122,10 @@ def test_random_sampler_replays_after_commit_before_tell(tmp_path, monkeypatch):
     X, y = make_classification(n_samples=30, n_features=4, random_state=7)
     kwargs = dict(
         estimator=LogisticRegression(max_iter=100),
-        param_grid={"C": [0.1, 1.0, 10.0, 100.0]},
-        scoring="accuracy", cv=2, random_search=True, n_iter=3,
+        search_space={"C": [0.1, 1.0, 10.0, 100.0]},
+        scoring="accuracy", cv=2, strategy="random", n_trials=3,
         random_state=None, dataset_id="random-post-commit-v1",
-        checkpoint_path=str(tmp_path / "random.sqlite3"),
+        storage_path=str(tmp_path / "random.sqlite3"),
         results_csv=str(tmp_path / "random.csv"), verbose=False, refit=False,
     )
     monkeypatch.setattr(CVExecutor, "evaluate", deterministic_evaluate)
@@ -159,15 +159,15 @@ def test_random_early_stopping_recovers_counter_after_post_commit_crash(tmp_path
     X, y = make_classification(n_samples=30, n_features=4, random_state=7)
     search = HyperPhoenixCV(
         estimator=LogisticRegression(max_iter=100),
-        param_grid={"C": [0.1, 1.0, 10.0, 100.0]},
+        search_space={"C": [0.1, 1.0, 10.0, 100.0]},
         scoring="accuracy",
         cv=2,
-        random_search=True,
-        n_iter=4,
+        strategy="random",
+        n_trials=4,
         random_state=7,
         early_stopping_patience=2,
         dataset_id="early-stop-v1",
-        checkpoint_path=str(tmp_path / "checkpoint.sqlite3"),
+        storage_path=str(tmp_path / "checkpoint.sqlite3"),
         results_csv=str(tmp_path / "results.csv"),
         verbose=False,
         refit=False,

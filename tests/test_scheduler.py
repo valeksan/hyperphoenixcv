@@ -10,10 +10,10 @@ from hyperphoenixcv.storage.sqlite_store import SQLiteStudyStore
 def make_search(tmp_path, **kwargs):
     values = {
         "estimator": LogisticRegression(max_iter=100),
-        "param_grid": {"C": [0.1, 1.0, 10.0]},
+        "search_space": {"C": [0.1, 1.0, 10.0]},
         "scoring": "accuracy",
         "cv": 2,
-        "checkpoint_path": str(tmp_path / "study.sqlite3"),
+        "storage_path": str(tmp_path / "study.sqlite3"),
         "results_csv": str(tmp_path / "results.csv"),
         "dataset_id": "scheduler-test-v1",
         "verbose": False,
@@ -95,7 +95,7 @@ def test_timeout_commits_resumable_failed_trial_and_reason(tmp_path, monkeypatch
     monkeypatch.setattr(scheduler_module, "Parallel", TimedOutParallel)
     X, y = make_classification(n_samples=40, n_features=4, random_state=0)
     search = make_search(
-        tmp_path, param_grid={"C": [0.1]}, n_jobs=2, trial_timeout=0.01,
+        tmp_path, search_space={"C": [0.1]}, n_jobs=2, trial_timeout=0.01,
     )
     search.fit(X, y)
 
@@ -128,7 +128,7 @@ def test_trial_parallelism_passes_thread_and_memmap_limits_without_oversubscript
     monkeypatch.setattr(scheduler_module, "Parallel", ImmediateParallel)
     X, y = make_classification(n_samples=40, n_features=4, random_state=0)
     search = make_search(
-        tmp_path, param_grid={"C": [0.1, 1.0]}, n_jobs=2,
+        tmp_path, search_space={"C": [0.1, 1.0]}, n_jobs=2,
         inner_max_num_threads=1, memmap_max_nbytes="2K", joblib_batch_size=1,
     )
     search.fit(X, y)

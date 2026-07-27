@@ -1,12 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — 2026-07-27
 
 ### Changed
 
 - Documentation examples now use canonical `search_space`, `strategy`,
   `n_trials`, and `storage_path` configuration. Added tracked 0.4-to-0.6
   migration guide and clone/get/set-params coverage.
+- Removed legacy constructor arguments: `param_grid`, `random_search`,
+  `n_iter`, `use_bayesian_optimization`, `bayesian_optimizer`,
+  `checkpoint_path`, and `clear_checkpoint`.
+- Removed experimental surrogate ranking and legacy atomic checkpoint writer.
 
 ## 0.5.0 — 2026-07-27
 

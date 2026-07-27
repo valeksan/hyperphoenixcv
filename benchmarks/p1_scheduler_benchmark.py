@@ -28,7 +28,7 @@ WORKLOADS = {"cheap": (80, 4, 2), "medium": (400, 12, 3), "expensive": (1200, 30
 def measure(name: str) -> dict[str, float]:
     samples, features, cv = WORKLOADS[name]
     X, y = make_classification(n_samples=samples, n_features=features, random_state=7)
-    strategy = RandomSearchStrategy({"C": range(1, 1_001)}, n_iter=100, random_state=7)
+    strategy = RandomSearchStrategy({"C": range(1, 1_001)}, n_trials=100, random_state=7)
     strategy.restore([])
     started = time.perf_counter()
     strategy.ask(100)
@@ -37,13 +37,14 @@ def measure(name: str) -> dict[str, float]:
         root = Path(directory)
         started = time.perf_counter()
         search = HyperPhoenixCV(
-            LogisticRegression(max_iter=200), {"C": [0.1, 1.0, 10.0]}, scoring="accuracy",
+            estimator=LogisticRegression(max_iter=200), search_space={"C": [0.1, 1.0, 10.0]},
+            strategy="grid", scoring="accuracy",
             cv=cv, n_jobs=1, refit=False, verbose=False, dataset_id=f"benchmark-{name}",
-            checkpoint_path=str(root / "study.sqlite3"), results_csv=str(root / "results.csv"),
+            storage_path=str(root / "study.sqlite3"), results_csv=str(root / "results.csv"),
         ).fit(X, y)
         elapsed = time.perf_counter() - started
         identity = StudyIdentity.create(
-            estimator=LogisticRegression(), param_grid={"x": [1]}, scoring="accuracy", cv=2,
+            estimator=LogisticRegression(), search_space={"x": [1]}, scoring="accuracy", cv=2,
             random_state=7, dataset_id=f"store-{name}", scorer_id=None, cv_id=None,
         )
         with SQLiteStudyStore(str(root / "store.sqlite3")) as store:

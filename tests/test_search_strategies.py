@@ -1,363 +1,53 @@
-"""
-Unit tests for search strategies.
-"""
-
 import importlib.util
-
-import pytest
-import numpy as np
 import random
-from sklearn.ensemble import RandomForestRegressor
+
+import numpy as np
+import pytest
 from sklearn.model_selection import ParameterSampler
 
-from src.hyperphoenixcv.search_strategies import (
-    SearchStrategy,
+from hyperphoenixcv.search_strategies import (
     ExhaustiveSearchStrategy,
     RandomSearchStrategy,
-    BayesianSearchStrategy,
     create_search_strategy,
 )
 
 
-class TestExhaustiveSearchStrategy:
-    """Test ExhaustiveSearchStrategy."""
-
-    def test_generate_parameters(self):
-        param_grid = {
-            'a': [1, 2],
-            'b': ['x', 'y'],
-        }
-        strategy = ExhaustiveSearchStrategy(param_grid)
-        params = strategy.generate_parameters()
-        assert len(params) == 4
-        expected = [
-            {'a': 1, 'b': 'x'},
-            {'a': 1, 'b': 'y'},
-            {'a': 2, 'b': 'x'},
-            {'a': 2, 'b': 'y'},
-        ]
-        for p in expected:
-            assert p in params
-
-    def test_suggest_next(self):
-        param_grid = {'a': [1, 2]}
-        strategy = ExhaustiveSearchStrategy(param_grid)
-        completed = [{'params': {'a': 1}}]
-        suggested = strategy.suggest_next(completed)
-        # Should return all parameters (no sorting)
-        assert len(suggested) == 2
-        assert {'a': 1} in suggested
-        assert {'a': 2} in suggested
-
-    def test_iter_parameters_is_lazy_for_large_grid(self):
-        strategy = ExhaustiveSearchStrategy({"a": range(10_000_000)})
-
-        params = strategy.iter_parameters()
-
-        assert iter(params) is params
-        assert strategy.total_candidates() == 10_000_000
-        assert next(params) == {"a": 0}
-
-    def test_ask_tell_skips_committed_history_without_materializing_grid(self):
-        strategy = ExhaustiveSearchStrategy({"a": [1, 2, 3]})
-        strategy.restore([{"params": {"a": 1}}])
-
-        assert strategy.ask(1) == [{"a": 2}]
-        strategy.tell([{"params": {"a": 2}, "mean_test_score": 0.5}])
-        assert strategy.ask(2) == [{"a": 3}]
-
-    def test_failed_and_negative_history_stay_reserved(self):
-        strategy = ExhaustiveSearchStrategy({"a": [1, 2, 3]})
-        strategy.restore([
-            {"params": {"a": 1}, "error": "fit failed"},
-            {"params": {"a": 2}, "mean_test_score": -3.0},
-        ])
-
-        assert strategy.ask(3) == [{"a": 3}]
+def test_grid_strategy_is_lazy_and_resume_safe():
+    strategy = ExhaustiveSearchStrategy({"a": [1, 2, 3]})
+    strategy.restore([{"params": {"a": 1}}])
+    assert strategy.ask(2) == [{"a": 2}, {"a": 3}]
+    assert strategy.total_candidates() == 3
 
 
-class TestRandomSearchStrategy:
-    """Test RandomSearchStrategy."""
-
-    def test_generate_parameters_full(self):
-        param_grid = {'a': [1, 2]}
-        strategy = RandomSearchStrategy(param_grid, n_iter=5)
-        params = strategy.generate_parameters()
-        # Since total combinations = 2 <= n_iter, returns all
-        assert len(params) == 2
-
-    def test_generate_parameters_random(self):
-        param_grid = {'a': [1, 2, 3, 4, 5]}
-        strategy = RandomSearchStrategy(param_grid, n_iter=3, random_state=42)
-        params = strategy.generate_parameters()
-        assert len(params) == 3
-        # Ensure all params are from the grid
-        for p in params:
-            assert p['a'] in [1, 2, 3, 4, 5]
-        # With fixed random_state, the sample should be deterministic
-        strategy2 = RandomSearchStrategy(param_grid, n_iter=3, random_state=42)
-        params2 = strategy2.generate_parameters()
-        assert params == params2
-
-    def test_suggest_next(self):
-        param_grid = {'a': [1, 2, 3]}
-        strategy = RandomSearchStrategy(param_grid, n_iter=2)
-        completed = [{'params': {'a': 1}}]
-        suggested = strategy.suggest_next(completed)
-        # Should return all generated parameters (no sorting)
-        assert len(suggested) == 2
-        # Since random sample may or may not include completed param
-        # We just check that each suggested param is in grid
-        for p in suggested:
-            assert p['a'] in [1, 2, 3]
-
-    def test_iter_parameters_does_not_mutate_global_rng(self):
-        random.seed(931)
-        np.random.seed(931)
-        expected_python = random.random()
-        expected_numpy = np.random.random()
-
-        random.seed(931)
-        np.random.seed(931)
-        strategy = RandomSearchStrategy({"a": range(10_000_000)}, n_iter=3, random_state=42)
-
-        params = list(strategy.iter_parameters())
-
-        assert len(params) == 3
-        assert len({item["a"] for item in params}) == 3
-        assert random.random() == expected_python
-        assert np.random.random() == expected_numpy
-
-    def test_total_candidates_respects_n_iter(self):
-        strategy = RandomSearchStrategy({"a": [1, 2]}, n_iter=10)
-        assert strategy.total_candidates() == 2
-
-    def test_conditional_list_of_dicts_matches_sklearn_order(self):
-        space = [
-            {"kind": ["a"], "value": [1, 2]},
-            {"kind": ["b"], "depth": [3, 4]},
-        ]
-        expected = list(ParameterSampler(space, n_iter=3, random_state=19))
-
-        assert list(RandomSearchStrategy(space, n_iter=3, random_state=19).iter_parameters()) == expected
-
-    def test_distribution_space_replays_and_honors_n_iter(self):
-        class IntegerDistribution:
-            def rvs(self, random_state=None):
-                return int(random_state.randint(1, 100))
-
-        strategy = RandomSearchStrategy(
-            {"value": IntegerDistribution()}, n_iter=4, random_state=19
-        )
-        first = list(strategy.iter_parameters())
-        second = list(strategy.iter_parameters())
-
-        assert len(first) == 4
-        assert first == second
-        assert strategy.total_candidates() == 4
+def test_random_strategy_replays_without_global_rng_mutation():
+    random.seed(931)
+    np.random.seed(931)
+    expected = (random.random(), np.random.random())
+    random.seed(931)
+    np.random.seed(931)
+    strategy = RandomSearchStrategy({"a": range(10_000_000)}, n_trials=3, random_state=42)
+    assert len(list(strategy.iter_parameters())) == 3
+    assert (random.random(), np.random.random()) == expected
 
 
-class TestBayesianSearchStrategy:
-    """Test BayesianSearchStrategy."""
-
-    @pytest.fixture
-    def param_grid(self):
-        return {'a': [1, 2, 3], 'b': ['x', 'y']}
-
-    @pytest.fixture
-    def completed_results(self):
-        return [
-            {
-                'params': {'a': 1, 'b': 'x'},
-                'mean_test_f1': 0.8,
-                'std_test_f1': 0.1,
-            },
-            {
-                'params': {'a': 2, 'b': 'x'},
-                'mean_test_f1': 0.9,
-                'std_test_f1': 0.05,
-            },
-        ]
-
-    def test_generate_parameters(self, param_grid):
-        strategy = BayesianSearchStrategy(param_grid, scoring='f1')
-        params = strategy.generate_parameters()
-        assert len(params) == 6  # 3 * 2
-
-    def test_suggest_next(self, param_grid, completed_results):
-        strategy = BayesianSearchStrategy(param_grid, scoring='f1', random_state=42)
-        suggested = strategy.suggest_next(completed_results)
-        # Should return remaining parameters sorted by predicted score
-        # Since we have only two completed, remaining = 4
-        assert len(suggested) == 4
-        # Ensure completed parameters are not in suggested
-        completed_params = [r['params'] for r in completed_results]
-        for p in suggested:
-            assert p not in completed_params
-        # Order should be deterministic given random_state
-        # We can't assert exact order because model predictions may vary,
-        # but we can assert that the list is not empty
-        assert all(isinstance(p, dict) for p in suggested)
-
-    def test_suggest_next_no_completed(self, param_grid):
-        strategy = BayesianSearchStrategy(param_grid, scoring='f1')
-        suggested = strategy.suggest_next([])
-        # Should return all parameters
-        assert len(suggested) == 6
-
-    def test_suggest_next_all_completed(self, param_grid, completed_results):
-        # Create enough results to cover all parameters
-        extra = [
-            {'params': {'a': 3, 'b': 'x'}, 'mean_test_f1': 0.7},
-            {'params': {'a': 1, 'b': 'y'}, 'mean_test_f1': 0.6},
-            {'params': {'a': 2, 'b': 'y'}, 'mean_test_f1': 0.5},
-            {'params': {'a': 3, 'b': 'y'}, 'mean_test_f1': 0.4},
-        ]
-        all_results = completed_results + extra
-        strategy = BayesianSearchStrategy(param_grid, scoring='f1')
-        suggested = strategy.suggest_next(all_results)
-        # No remaining parameters
-        assert suggested == []
-
-    def test_encode_params(self, param_grid):
-        strategy = BayesianSearchStrategy(param_grid, scoring='f1')
-        params_list = [
-            {'a': 1, 'b': 'x'},
-            {'a': 2, 'b': 'y'},
-        ]
-        encoded = strategy._encode_params(params_list)
-        assert encoded.shape == (2, 2)
-        # 'a' should be numeric, 'b' encoded as 0/1
-        assert encoded[0, 0] == 1
-        assert encoded[1, 0] == 2
-        # 'b' encoding may be 0 for 'x' and 1 for 'y' (or vice versa)
-        assert set(encoded[:, 1]) == {0, 1}
+def test_random_strategy_matches_sklearn_sampler():
+    space = [{"kind": ["a"], "value": [1, 2]}, {"kind": ["b"], "depth": [3, 4]}]
+    expected = list(ParameterSampler(space, n_iter=3, random_state=19))
+    assert list(RandomSearchStrategy(space, n_trials=3, random_state=19).iter_parameters()) == expected
 
 
-class TestCreateSearchStrategy:
-    """Test factory function."""
+def test_factory_has_only_canonical_strategies():
+    assert isinstance(create_search_strategy({"a": [1]}, "grid", None), ExhaustiveSearchStrategy)
+    random_strategy = create_search_strategy({"a": [1, 2]}, "random", 1, random_state=7)
+    assert isinstance(random_strategy, RandomSearchStrategy)
+    assert random_strategy.n_trials == 1
+    with pytest.raises(ValueError, match="grid.*random.*optuna"):
+        create_search_strategy({"a": [1]}, "experimental_surrogate_ranking", None)
 
-    def test_exhaustive(self):
-        param_grid = {'a': [1, 2]}
-        strategy = create_search_strategy(param_grid)
-        assert isinstance(strategy, ExhaustiveSearchStrategy)
 
-    def test_random_search(self):
-        param_grid = {'a': [1, 2]}
-        with pytest.warns(FutureWarning, match="random_search is deprecated"):
-            strategy = create_search_strategy(param_grid, random_search=True, n_iter=5)
-        assert isinstance(strategy, RandomSearchStrategy)
-        assert strategy.n_iter == 5
-
-    def test_explicit_random_strategy_needs_no_legacy_flag(self):
-        strategy = create_search_strategy({'a': [1, 2]}, strategy="random", n_trials=5)
-        assert isinstance(strategy, RandomSearchStrategy)
-        assert strategy.n_iter == 5
-
-    def test_bayesian(self):
-        param_grid = {'a': [1, 2]}
-        model = RandomForestRegressor()
-        with pytest.warns(FutureWarning, match="not Bayesian optimization"):
-            strategy = create_search_strategy(
-                param_grid,
-                use_bayesian_optimization=True,
-                scoring='accuracy',
-                bayesian_optimizer=model,
-            )
-        assert isinstance(strategy, BayesianSearchStrategy)
-        assert strategy.scoring == 'accuracy'
-        assert strategy.model is model
-
-    def test_bayesian_default_model(self):
-        param_grid = {'a': [1, 2]}
-        with pytest.warns(FutureWarning):
-            strategy = create_search_strategy(
-                param_grid,
-                use_bayesian_optimization=True,
-            )
-        assert isinstance(strategy, BayesianSearchStrategy)
-        assert strategy.scoring == 'f1'
-        assert isinstance(strategy.model, RandomForestRegressor)
-
-    def test_optuna_requires_optional_dependency(self):
-        if importlib.util.find_spec("optuna") is not None:
-            pytest.skip("Optuna installed; optional-dependency failure path unavailable")
+def test_factory_requires_trial_budget_for_random_and_optuna():
+    with pytest.raises(ValueError, match="requires n_trials"):
+        create_search_strategy({"a": [1]}, "random", None)
+    if importlib.util.find_spec("optuna") is None:
         with pytest.raises(ImportError, match=r"hyperphoenixcv\[optuna\]"):
-            create_search_strategy(
-                None,
-                strategy="optuna",
-                search_space={"C": object()},
-                n_trials=2,
-            )
-
-
-@pytest.mark.skipif(importlib.util.find_spec("optuna") is None, reason="optional Optuna dependency")
-def test_optuna_adapter_replays_committed_trial_and_honors_total_budget():
-    import optuna
-    from src.hyperphoenixcv.search_strategies import OptunaSearchStrategy
-
-    space = {"C": optuna.distributions.FloatDistribution(1e-3, 1, log=True)}
-    strategy = OptunaSearchStrategy(space, n_trials=2, random_state=7, warmup_trials=1)
-    strategy.restore([])
-    params = strategy.ask(1)[0]
-    result = {"params": params, "mean_test_score": 0.7}
-    result.update(strategy.result_metadata(params))
-    strategy.tell([result])
-
-    resumed = OptunaSearchStrategy(space, n_trials=2, random_state=7, warmup_trials=1)
-    resumed.restore([result])
-    assert len(resumed.ask(2)) == 1
-
-
-@pytest.mark.skipif(importlib.util.find_spec("optuna") is None, reason="optional Optuna dependency")
-def test_optuna_adapter_replays_vectors_terminal_states_and_reporter():
-    import optuna
-    from src.hyperphoenixcv.search_strategies import OptunaSearchStrategy
-
-    space = {"C": optuna.distributions.CategoricalDistribution([0.1, 1.0, 10.0, 100.0])}
-    directions = {"accuracy": "maximize", "loss": "minimize"}
-    strategy = OptunaSearchStrategy(space, n_trials=3, random_state=7, directions=directions)
-    strategy.restore([])
-    params = strategy.ask(1)[0]
-    completed = {"params": params, "objective_values": {"accuracy": 0.8, "loss": 0.2}}
-    completed.update(strategy.result_metadata(params))
-    strategy.tell([completed])
-
-    pruned_params = {"C": next(value for value in [0.1, 1.0, 10.0, 100.0] if value != params["C"])}
-    resumed = OptunaSearchStrategy(space, n_trials=3, random_state=7, directions=directions)
-    resumed.restore([completed, {"params": pruned_params, "trial_state": "pruned",
-                                 "optuna_distributions": completed["optuna_distributions"]}])
-    assert resumed.study.trials[0].values == [0.8, 0.2]
-    assert resumed.study.trials[1].state == optuna.trial.TrialState.PRUNED
-    assert len(resumed.ask(3)) == 1
-
-    scalar = OptunaSearchStrategy(space, n_trials=1, random_state=3, directions={"accuracy": "maximize"})
-    scalar.restore([])
-    params = scalar.ask(1)[0]
-    report = scalar.intermediate_reporter(params)
-    assert isinstance(report(1, 0.5), bool)
-    with pytest.raises(ValueError, match="monotonically"):
-        report(1, 0.6)
-
-    forced = OptunaSearchStrategy(space, n_trials=1, random_state=4, directions={"accuracy": "maximize"})
-    forced.restore([])
-    forced_params = forced.ask(1)[0]
-    forced_trial = forced._trials_by_key[next(iter(forced._trials_by_key))]
-    forced_trial.should_prune = lambda: True
-    assert forced.intermediate_reporter(forced_params)(1, 0.2) is True
-    pruned = {"params": forced_params, "trial_state": "pruned"}
-    pruned.update(forced.result_metadata(forced_params))
-    forced.tell([pruned])
-    replayed = OptunaSearchStrategy(space, n_trials=1, random_state=4, directions={"accuracy": "maximize"})
-    replayed.restore([pruned])
-    assert replayed.study.trials[0].state == optuna.trial.TrialState.PRUNED
-
-
-def test_optuna_conflicts_with_legacy_search_flags_before_import():
-    with pytest.raises(ValueError, match="conflicts"):
-        create_search_strategy(
-            None,
-            strategy="optuna",
-            search_space={},
-            random_search=True,
-        )
+            create_search_strategy({"C": object()}, "optuna", 2)

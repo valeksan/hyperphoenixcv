@@ -10,7 +10,7 @@ from hyperphoenixcv.study_identity import StudyIdentity, canonical_json, param_k
 
 def identity(dataset_id="train-v1"):
     return StudyIdentity.create(
-        estimator=LogisticRegression(), param_grid={"C": [0.1, 1.0]},
+        estimator=LogisticRegression(), search_space={"C": [0.1, 1.0]},
         scoring="accuracy", cv=2, random_state=1, dataset_id=dataset_id,
         scorer_id=None, cv_id=None,
     )

@@ -47,7 +47,7 @@ def test_callback_failure_is_fail_fast(tmp_path):
     X, y = make_classification(n_samples=20, n_features=4, random_state=0)
     search = HyperPhoenixCV(
         LogisticRegression(max_iter=100), {"C": [1.0]}, scoring="accuracy", cv=2,
-        checkpoint_path=str(tmp_path / "study.sqlite3"), results_csv=str(tmp_path / "results.csv"),
+        storage_path=str(tmp_path / "study.sqlite3"), results_csv=str(tmp_path / "results.csv"),
         dataset_id="events-fail-fast", refit=False,
         callbacks=[lambda event: (_ for _ in ()).throw(RuntimeError("callback failed"))],
     )
@@ -60,7 +60,7 @@ def test_callbacks_run_in_coordinator_with_trial_parallelism(tmp_path):
     pids = []
     search = HyperPhoenixCV(
         LogisticRegression(max_iter=100), {"C": [0.1, 1.0]}, scoring="accuracy", cv=2,
-        n_jobs=2, checkpoint_path=str(tmp_path / "study.sqlite3"),
+        n_jobs=2, storage_path=str(tmp_path / "study.sqlite3"),
         results_csv=str(tmp_path / "results.csv"), dataset_id="events-parallel", refit=False,
         callbacks=[lambda event: pids.append(os.getpid()) if isinstance(event, TrialCompleted) else None],
     )
@@ -73,7 +73,7 @@ def test_cancel_callback_emits_stopped(tmp_path):
     events = []
     search = HyperPhoenixCV(
         LogisticRegression(max_iter=100), {"C": [1.0]}, scoring="accuracy", cv=2,
-        checkpoint_path=str(tmp_path / "study.sqlite3"), results_csv=str(tmp_path / "results.csv"),
+        storage_path=str(tmp_path / "study.sqlite3"), results_csv=str(tmp_path / "results.csv"),
         dataset_id="events-cancel", refit=False, cancel_callback=lambda: "cancelled",
         callbacks=[events.append],
     )

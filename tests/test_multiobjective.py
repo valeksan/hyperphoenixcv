@@ -11,7 +11,7 @@ from src.hyperphoenixcv.study_identity import StudyIdentity
 
 def _identity():
     return StudyIdentity.create(
-        estimator=LogisticRegression(), param_grid={"C": [0.1]}, scoring=["accuracy", "f1"],
+        estimator=LogisticRegression(), search_space={"C": [0.1]}, scoring=["accuracy", "f1"],
         cv=2, random_state=1, dataset_id="multi-test", scorer_id=None, cv_id=None,
     )
 
@@ -69,12 +69,12 @@ def test_multiobjective_fit_and_sqlite_resume_keep_pareto_front(tmp_path):
     import optuna
 
     settings = dict(
-        estimator=LogisticRegression(max_iter=200), param_grid=None, strategy="optuna",
+        estimator=LogisticRegression(max_iter=200), strategy="optuna",
         search_space={"C": optuna.distributions.CategoricalDistribution([0.1, 1.0])},
         n_trials=2, scoring=["accuracy", "f1"],
         optuna_directions={"accuracy": "maximize", "f1": "maximize"},
         refit=False, random_state=7, cv=2, dataset_id="pareto-resume-test",
-        checkpoint_path=str(tmp_path / "pareto.sqlite3"), results_csv=str(tmp_path / "pareto.csv"), verbose=False,
+        storage_path=str(tmp_path / "pareto.sqlite3"), results_csv=str(tmp_path / "pareto.csv"), verbose=False,
     )
     first = HyperPhoenixCV(**settings).fit(X, y)
     assert first.pareto_front_
@@ -90,12 +90,12 @@ def test_intermediate_evaluator_failure_commits_diagnostics_and_plain_cv_is_not_
     import optuna
 
     common = dict(
-        estimator=LogisticRegression(max_iter=200), param_grid=None, strategy="optuna",
+        estimator=LogisticRegression(max_iter=200), strategy="optuna",
         search_space={"C": optuna.distributions.CategoricalDistribution([0.1])}, n_trials=1,
         scoring="accuracy", random_state=3, cv=2, dataset_id="prune-test", verbose=False,
     )
     plain_path = tmp_path / "plain.sqlite3"
-    plain = HyperPhoenixCV(**common, checkpoint_path=str(plain_path), results_csv=str(tmp_path / "plain.csv"), refit=False)
+    plain = HyperPhoenixCV(**common, storage_path=str(plain_path), results_csv=str(tmp_path / "plain.csv"), refit=False)
     plain.fit(X, y)
     with SQLiteStudyStore(str(plain_path)) as store:
         assert store.results(plain.study_id)[0].get("trial_state") != "pruned"
@@ -106,7 +106,7 @@ def test_intermediate_evaluator_failure_commits_diagnostics_and_plain_cv_is_not_
 
     broken_path = tmp_path / "broken.sqlite3"
     broken = HyperPhoenixCV(
-        **common, checkpoint_path=str(broken_path), results_csv=str(tmp_path / "broken.csv"),
+        **common, storage_path=str(broken_path), results_csv=str(tmp_path / "broken.csv"),
         intermediate_evaluator=broken_evaluator, refit=False, resume="never",
     ).fit(X, y)
     with SQLiteStudyStore(str(broken_path)) as store:

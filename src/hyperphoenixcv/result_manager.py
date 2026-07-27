@@ -58,15 +58,6 @@ class ResultManager:
         for result in results:
             self.add_result(result)
 
-    def load_from_checkpoint(self, checkpoint_path: str) -> List[Dict[str, Any]]:
-        """
-        Removed implicit pickle loading path.
-        """
-        raise RuntimeError(
-            "Implicit pickle loading was removed. Use "
-            "HyperPhoenixCV.import_legacy_checkpoint(path, trusted=True)."
-        )
-
     def clear_results(self):
         """
         Clear the internal results list.

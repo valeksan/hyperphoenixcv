@@ -10,10 +10,10 @@ from hyperphoenixcv import HyperPhoenixCV
 def make_search(tmp_path, **kwargs):
     values = {
         "estimator": LogisticRegression(max_iter=200),
-        "param_grid": {"C": [0.1, 1.0]},
+        "search_space": {"C": [0.1, 1.0]},
         "scoring": "accuracy",
         "cv": 2,
-        "checkpoint_path": str(tmp_path / "study.sqlite3"),
+        "storage_path": str(tmp_path / "study.sqlite3"),
         "results_csv": str(tmp_path / "results.csv"),
         "dataset_id": "sklearn-parity-v1",
         "verbose": False,
@@ -58,7 +58,7 @@ def test_numeric_error_score_records_failed_candidate_like_grid_search(tmp_path)
         grid = GridSearchCV(
             LogisticRegression(max_iter=200), params, scoring="accuracy", cv=2, error_score=np.nan
         ).fit(X, y)
-    search = make_search(tmp_path, param_grid=params, error_score=np.nan)
+    search = make_search(tmp_path, search_space=params, error_score=np.nan)
     search.fit(X, y)
 
     assert np.isnan(search.cv_results_["mean_test_accuracy"][0])

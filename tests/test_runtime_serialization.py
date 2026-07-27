@@ -19,9 +19,9 @@ def test_runtime_configuration_and_strategies_round_trip_through_joblib(tmp_path
             trial_timeout=None, memmap_max_nbytes="1M", memmap_temp_folder=None,
             joblib_batch_size="auto",
         )),
-        "grid": create_search_strategy({"C": [0.1, 1.0]}),
+        "grid": create_search_strategy({"C": [0.1, 1.0]}, "grid", None),
         "random": create_search_strategy(
-            {"C": [0.1, 1.0]}, strategy="random", n_trials=2, random_state=7,
+            {"C": [0.1, 1.0]}, "random", 2, random_state=7,
         ),
     }
     path = tmp_path / "runtime.joblib"

@@ -39,10 +39,10 @@ print("="*60)
 ts_cv = TimeSeriesSplit(n_splits=5)
 hp_ts = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=param_grid,
     cv=ts_cv,  # Pass the splitter object directly
     scoring='accuracy',
-    checkpoint_path='timeseries_checkpoint.sqlite3',
+    storage_path='timeseries_checkpoint.sqlite3',
     dataset_id='custom-cv-synthetic-v1',
     verbose=True
 )
@@ -61,10 +61,10 @@ print("="*60)
 group_cv = GroupKFold(n_splits=5)
 hp_group = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=param_grid,
     cv=group_cv,
     scoring='accuracy',
-    checkpoint_path='groupkfold_checkpoint.sqlite3',
+    storage_path='groupkfold_checkpoint.sqlite3',
     dataset_id='custom-cv-synthetic-v1',
     verbose=True
 )
@@ -88,8 +88,8 @@ else:
     print("GroupKFold performed better on this synthetic dataset.")
 
 # Clean up checkpoints
-hp_ts.clear_checkpoint_file()
-hp_group.clear_checkpoint_file()
+hp_ts.clear_storage()
+hp_group.clear_storage()
 print("\nSQLite study stores deleted.")
 
 # Summary

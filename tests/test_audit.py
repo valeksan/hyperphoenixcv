@@ -12,9 +12,9 @@ from hyperphoenixcv.storage.sqlite_store import _restore
 
 def _search(tmp_path, **kwargs):
     base = dict(
-        estimator=LogisticRegression(max_iter=200), param_grid={"C": [0.1, 1.0]},
+        estimator=LogisticRegression(max_iter=200), search_space={"C": [0.1, 1.0]},
         scoring="accuracy", cv=2, verbose=False, refit=False,
-        checkpoint_path=str(tmp_path / "study.sqlite3"),
+        storage_path=str(tmp_path / "study.sqlite3"),
         results_csv=str(tmp_path / "projection.csv"),
     )
     base.update(kwargs)
@@ -34,7 +34,7 @@ def test_trial_history_is_read_only_paginated_and_has_all_terminal_states(tmp_pa
 
 
 def test_audit_json_is_lossless_and_atomic_csv(tmp_path):
-    search = _search(tmp_path, param_grid={"C": [0.1]})
+    search = _search(tmp_path, search_space={"C": [0.1]})
     X, y = make_classification(n_samples=40, n_features=4, random_state=1)
     search.fit(X, y)
     history = search.trial_history_
@@ -104,7 +104,7 @@ def test_callable_refit_uses_complete_cv_result_index(tmp_path):
 
 
 def test_cv_result_limit_keeps_large_history_out_of_ram_projection(tmp_path):
-    search = _search(tmp_path, param_grid={"C": [0.1, 1.0, 10.0]}, refit=True, max_cv_results=2)
+    search = _search(tmp_path, search_space={"C": [0.1, 1.0, 10.0]}, refit=True, max_cv_results=2)
     X, y = make_classification(n_samples=40, n_features=4, random_state=2)
 
     with pytest.warns(UserWarning, match="cv_results_ was not materialized"):

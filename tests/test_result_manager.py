@@ -115,15 +115,3 @@ class TestResultManager:
     def test_format_cv_results_empty(self, manager):
         cv_results = manager.format_cv_results()
         assert cv_results == {}
-
-    def test_load_from_checkpoint(self, manager, tmp_path):
-        checkpoint_path = tmp_path / "checkpoint.pkl"
-        with pytest.raises(RuntimeError, match="Implicit pickle loading"):
-            manager.load_from_checkpoint(str(checkpoint_path))
-        assert manager.results == []
-
-    def test_load_from_checkpoint_no_file(self, manager, tmp_path):
-        checkpoint_path = tmp_path / "nonexistent.pkl"
-        with pytest.raises(RuntimeError, match="Implicit pickle loading"):
-            manager.load_from_checkpoint(str(checkpoint_path))
-        assert manager.results == []

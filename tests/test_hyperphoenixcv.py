@@ -32,11 +32,11 @@ def make_search(tmp_path, pipeline, grid, **kwargs):
     scoring = kwargs.pop("scoring", "accuracy")
     return HyperPhoenixCV(
         estimator=pipeline,
-        param_grid=grid,
+        search_space=grid,
         scoring=scoring,
         cv=2,
         n_jobs=1,
-        checkpoint_path=str(tmp_path / "study.sqlite3"),
+        storage_path=str(tmp_path / "study.sqlite3"),
         results_csv=str(tmp_path / "results.csv"),
         dataset_id="hyperphoenixcv-tests-v1",
         verbose=False,
@@ -47,7 +47,7 @@ def make_search(tmp_path, pipeline, grid, **kwargs):
 def test_initialization_has_no_persistence_side_effect(sample_pipeline, sample_param_grid, tmp_path):
     search = make_search(tmp_path, sample_pipeline, sample_param_grid)
 
-    assert search.checkpoint_path.endswith("study.sqlite3")
+    assert search.storage_path.endswith("study.sqlite3")
     assert not (tmp_path / "study.sqlite3").exists()
 
 
@@ -76,7 +76,7 @@ def test_sqlite_resume_does_not_duplicate_trials(sample_data, sample_pipeline, s
 def test_random_search_and_multiple_metrics_use_distinct_studies(sample_data, sample_pipeline, sample_param_grid, tmp_path):
     X, y = sample_data
     random = make_search(tmp_path / "random", sample_pipeline, sample_param_grid,
-                         random_search=True, n_iter=2, random_state=7)
+                         strategy="random", n_trials=2, random_state=7)
     random.fit(X, y)
     assert len(random.cv_results_["params"]) == 2
 
@@ -120,8 +120,8 @@ def test_fit_routes_sample_weight_to_cv_and_refit(tmp_path):
     X, y = make_classification(n_samples=40, n_features=4, random_state=42)
     search = HyperPhoenixCV(
         estimator=LogisticRegression(max_iter=1000),
-        param_grid={"C": [1.0]}, scoring="accuracy", cv=2,
-        checkpoint_path=str(tmp_path / "study.sqlite3"),
+        search_space={"C": [1.0]}, scoring="accuracy", cv=2,
+        storage_path=str(tmp_path / "study.sqlite3"),
         results_csv=str(tmp_path / "results.csv"), dataset_id="fit-params-v1",
         verbose=False,
     )

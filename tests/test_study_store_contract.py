@@ -24,7 +24,7 @@ def assert_study_store_contract(store: StudyStore, identity: StudyIdentity) -> N
 
 def test_sqlite_study_store_contract(tmp_path):
     identity = StudyIdentity.create(
-        estimator=LogisticRegression(), param_grid={"C": [1.0]}, scoring="accuracy",
+        estimator=LogisticRegression(), search_space={"C": [1.0]}, scoring="accuracy",
         cv=2, random_state=7, dataset_id="store-contract-v1", scorer_id=None, cv_id=None,
     )
     store = SQLiteStudyStore(tmp_path / "study.sqlite3")

@@ -134,11 +134,9 @@ print(report)  # imported/skipped/failed и детали невалидных з
 
 ## 📚 Расширенное использование
 
-### Deprecated surrogate ranking
+### Стратегии поиска
 
-`use_bayesian_optimization=True` — временный compatibility API. Это **не**
-байесовская оптимизация: нет acquisition function или последовательного
-байесовского sampler. Используйте seeded random search или настоящий Optuna ask/tell:
+Используйте seeded random search или настоящий Optuna ask/tell:
 
 ```python
 hp = HyperPhoenixCV(
@@ -344,13 +342,10 @@ hp.fit(X, y, groups=groups)
 - `resume`: `"auto"` (по умолчанию), `"must"` или `"never"`.
 - `max_cv_results`: max trials в materialized `cv_results_` (по умолчанию=10,000);
   `None` включает unbounded projection.
-- `clear_checkpoint=True`: deprecated; перед `fit()` вызывайте
-  `clear_checkpoint_file()`. Параметр будет удалён в 0.6.
-- Legacy `param_grid`, `random_search`, `n_iter`,
-  `use_bayesian_optimization`, `bayesian_optimizer` и `checkpoint_path`
-  выдают `FutureWarning` в 0.5 и удаляются в 0.6. Используйте
-  `search_space`, `strategy`, `n_trials`, `storage_path` и `resume`.
-  Подробнее: [migration 0.4 → 0.6](docs/migration_0.4_to_0.6.md).
+- `clear_storage()`: явно удалить SQLite storage перед `fit()`.
+- В 0.6 удалены legacy `param_grid`, `random_search`, `n_iter`,
+  `use_bayesian_optimization`, `bayesian_optimizer`, `checkpoint_path` и
+  `clear_checkpoint`. Подробнее: [migration 0.4 → 0.6](docs/migration_0.4_to_0.6.md).
 - `results_csv`: путь к CSV‑файлу для сохранения результатов (по умолчанию=None).
 - `verbose`: уровень детализации (по умолчанию=False).
 
@@ -369,7 +364,7 @@ hp.fit(X, y, groups=groups)
 - `get_top_results(n=10)`: вернуть DataFrame с топ‑N кандидатами.
 - `load_results_from_checkpoint(n=10)`: прочитать top results из SQLite после прерывания.
 - `import_legacy_checkpoint(path, trusted=True)`: однократная trusted migration legacy pickle.
-- `clear_checkpoint_file()`: явно удалить SQLite store.
+- `clear_storage()`: явно удалить SQLite store.
 - `load_trial_history()`: открыть audit history matching existing study.
 
 SQLite store поддержан только на локальной файловой системе. Windows locking и

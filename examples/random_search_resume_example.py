@@ -1,8 +1,7 @@
 """Seeded random search with resumable SQLite checkpoint.
 
-This project currently has no Bayesian optimizer. The deprecated
-``use_bayesian_optimization`` flag enables experimental surrogate ranking only;
-it has no acquisition function or Bayesian sequential sampler.
+``strategy="random"`` uses seeded random search. It has no acquisition
+function or Bayesian sequential sampler.
 """
 
 from sklearn.datasets import make_classification
@@ -15,19 +14,19 @@ X, y = make_classification(n_samples=500, n_features=20, random_state=42)
 
 search = HyperPhoenixCV(
     estimator=RandomForestClassifier(random_state=42),
-    param_grid={
+    search_space={
         "n_estimators": [50, 100, 200],
         "max_depth": [None, 10, 20],
         "min_samples_split": [2, 5, 10],
     },
     scoring="accuracy",
     cv=5,
-    random_search=True,
-    n_iter=12,
+    strategy="random",
+    n_trials=12,
     random_state=42,
     parallelism="trials",
     n_jobs=2,
-    checkpoint_path="random_checkpoint.sqlite3",
+    storage_path="random_checkpoint.sqlite3",
     dataset_id="random-search-example-v1",
     results_csv="random_results.csv",
 )

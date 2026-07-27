@@ -10,7 +10,6 @@ from hyperphoenixcv import HyperPhoenixCV
 X, y = load_breast_cancer(return_X_y=True)
 search = HyperPhoenixCV(
     estimator=LogisticRegression(max_iter=500),
-    param_grid=None,
     strategy="optuna",
     search_space={"C": optuna.distributions.FloatDistribution(1e-3, 10, log=True)},
     n_trials=20,
@@ -19,7 +18,7 @@ search = HyperPhoenixCV(
     refit=False,
     random_state=42,
     dataset_id="breast-cancer-pareto-v1",
-    checkpoint_path="pareto.sqlite3",
+    storage_path="pareto.sqlite3",
 )
 search.fit(X, y)
 for trial in search.pareto_front_:
