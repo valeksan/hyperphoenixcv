@@ -10,7 +10,6 @@ an optional Optuna backend, and experimental surrogate-ranking compatibility.
 
 import warnings
 import secrets
-import os
 from pathlib import Path
 from collections.abc import Mapping
 import numpy as np
@@ -18,7 +17,6 @@ import pandas as pd
 from typing import Union
 from sklearn.base import BaseEstimator, clone
 from sklearn.exceptions import NotFittedError
-from joblib import Parallel, delayed, parallel_config
 
 from .search_strategies import create_search_strategy
 from .legacy_pickle import load_legacy_results, validate_legacy_result
@@ -26,11 +24,8 @@ from .result_manager import ResultManager
 from .cv_executor import SklearnCVEvaluator
 from .study_identity import StudyIdentity
 from .storage import SQLiteStudyStore
-
-
-def _evaluate_trial(evaluator, kwargs: dict) -> dict:
-    """Pickle-friendly worker entry point for trial-level parallelism."""
-    return evaluator.evaluate(**kwargs)
+from .study_engine import StudyEngine, StudySpec
+from .scheduler import SchedulerSpec, TrialScheduler
 
 
 def _early_stop_from_results(results: list[dict], metric: str) -> tuple[float, int]:
@@ -262,7 +257,7 @@ class HyperPhoenixCV(BaseEstimator):
     def _reset_fit_state(self):
         """Discard runtime and fitted state from a previous fit attempt."""
         for name in (
-            "search_strategy", "study_store", "study_id", "result_manager", "cv_executor",
+            "search_strategy", "study_store", "study_id", "study_engine", "trial_scheduler", "result_manager", "cv_executor",
             "_study_identity", "best_params_", "best_score_", "best_estimator_", "cv_results_", "best_index_",
         ):
             self.__dict__.pop(name, None)
@@ -307,27 +302,17 @@ class HyperPhoenixCV(BaseEstimator):
             raise ValueError("intermediate_evaluator requires strategy='optuna'")
 
     def _worker_count(self) -> int:
-        if self.n_jobs == 0:
-            raise ValueError("n_jobs must not be 0")
-        if self.n_jobs > 0:
-            return self.n_jobs
-        return max(1, (os.cpu_count() or 1) + 1 + self.n_jobs)
+        return self.trial_scheduler.worker_count()
 
     def _validate_scheduler(self) -> None:
-        if self.parallelism not in {"trials", "folds"}:
-            raise ValueError("parallelism must be 'trials' or 'folds'")
-        self._worker_count()
-        if self.inner_max_num_threads is not None and self.inner_max_num_threads < 1:
-            raise ValueError("inner_max_num_threads must be a positive integer or None")
-        if self.trial_timeout is not None:
-            if self.trial_timeout <= 0:
-                raise ValueError("trial_timeout must be a positive number or None")
-            if self.parallelism != "trials" or self._worker_count() < 2:
-                raise ValueError("trial_timeout requires parallelism='trials' and n_jobs >= 2")
-        if self.joblib_batch_size != "auto" and (
-            not isinstance(self.joblib_batch_size, int) or self.joblib_batch_size < 1
-        ):
-            raise ValueError("joblib_batch_size must be 'auto' or a positive integer")
+        self.trial_scheduler = TrialScheduler(SchedulerSpec(
+            parallelism=self.parallelism, n_jobs=self.n_jobs,
+            inner_max_num_threads=self.inner_max_num_threads,
+            trial_timeout=self.trial_timeout,
+            memmap_max_nbytes=self.memmap_max_nbytes,
+            memmap_temp_folder=self.memmap_temp_folder,
+            joblib_batch_size=self.joblib_batch_size,
+        ))
         if self.cancel_callback is not None and not callable(self.cancel_callback):
             raise ValueError("cancel_callback must be callable or None")
 
@@ -367,29 +352,7 @@ class HyperPhoenixCV(BaseEstimator):
             }
             for params in proposals
         ]
-        if len(kwargs) == 1 and self.trial_timeout is None:
-            return [_evaluate_trial(self.cv_executor, kwargs[0])]
-        config = {
-            "backend": "loky", "n_jobs": self._worker_count() if self.trial_timeout is not None else len(kwargs),
-            "inner_max_num_threads": self.inner_max_num_threads,
-            "max_nbytes": self.memmap_max_nbytes,
-            "mmap_mode": "r",
-            "temp_folder": self.memmap_temp_folder,
-        }
-        with parallel_config(**config):
-            try:
-                return Parallel(timeout=self.trial_timeout, batch_size=self.joblib_batch_size)(
-                    delayed(_evaluate_trial)(self.cv_executor, item) for item in kwargs
-                )
-            except TimeoutError:
-                if len(kwargs) != 1:
-                    raise RuntimeError("scheduler timeout must evaluate exactly one trial")
-                return [{
-                    "params": kwargs[0]["params"],
-                    "error": f"trial exceeded timeout of {self.trial_timeout} seconds",
-                    "error_type": "TrialTimeout",
-                    "cancellation_reason": "trial_timeout",
-                }]
+        return self.trial_scheduler.evaluate(self.cv_executor, kwargs)
 
     def _format_metric_string(self, result: dict) -> str:
         """
@@ -564,127 +527,42 @@ class HyperPhoenixCV(BaseEstimator):
         checkpoint_results = self.study_store.results(self.study_id)
         self.result_manager.add_results(checkpoint_results)
 
-        # Keep candidate generation lazy. Large grids must not consume RAM before
-        # their first trial starts.
         total_candidates = self.search_strategy.total_candidates()
+        completed_keys = self.study_store.completed_param_keys(self.study_id)
         if self.verbose:
             print(f"Total combinations: {total_candidates}")
-
-        # Resume sampler from committed terminal trials, then drive every mode
-        # through one incremental ask -> evaluate -> commit -> tell loop.
-        completed_keys = self.study_store.completed_param_keys(self.study_id)
-        self.search_strategy.restore(checkpoint_results)
-        if self.verbose:
             print(f"Completed trials: {len(completed_keys)}")
-
-        # Early stopping needs a meaningful proposal order. Exhaustive grid has
-        # none, so legacy patience is ignored there rather than silently making
-        # grid results order-dependent.
-        early_stopping_enabled = self.early_stopping_patience is not None and (
-            self.random_search or self.use_bayesian_optimization
-        )
-        if self.early_stopping_patience is not None and not early_stopping_enabled:
+        adaptive_search = self.random_search or self.use_bayesian_optimization
+        if self.early_stopping_patience is not None and not adaptive_search:
             warnings.warn(
                 "early_stopping_patience applies only to random or adaptive search; ignoring it for grid search.",
-                UserWarning,
-                stacklevel=2,
+                UserWarning, stacklevel=2,
             )
 
-        # Early stopping tracking. Rebuild from committed trials if state write
-        # was interrupted after a trial commit.
-        primary_metric = self._scoring[0]
-        best_score, no_improvement_count = _early_stop_from_results(
-            checkpoint_results, primary_metric
+        def on_trial(index, params, result):
+            if not self.verbose:
+                return
+            print(f"\n[{index}/{total_candidates}] Testing: {params}")
+            if "error" not in result:
+                print(f"Saved. Current: {self._format_metric_string(result)} | Best: {self._compute_best_metrics()}")
+
+        spec = StudySpec(
+            scoring=tuple(self._scoring), strategy=self.strategy,
+            random_search=self.random_search, adaptive_search=adaptive_search,
+            early_stopping_patience=self.early_stopping_patience,
+            batch_size=self._worker_count() if self.parallelism == "trials" else 1,
+            total_candidates=total_candidates,
+            optuna_directions=dict(self.optuna_directions) if self.optuna_directions is not None else None,
+            cancel_callback=self.cancel_callback,
+            timeout_enabled=self.trial_timeout is not None,
         )
-        if early_stopping_enabled or self.trial_timeout is not None or self.cancel_callback is not None:
-            saved_state = self.study_store.study_state(self.study_id).get("early_stopping", {})
-            if (
-                saved_state.get("metric") == primary_metric
-                and saved_state.get("processed_trial_count") == len(checkpoint_results)
-            ):
-                best_score = saved_state["best_score"]
-                no_improvement_count = saved_state["no_improvement_count"]
-
-        if early_stopping_enabled and no_improvement_count >= self.early_stopping_patience:
-            proposals_available = False
-        else:
-            proposals_available = True
-
-        # Exactly one primary axis: trials use bounded process batches with
-        # single-threaded CV; folds evaluate one trial at a time using n_jobs.
-        batch_size = self._worker_count() if self.parallelism == "trials" else 1
-        if early_stopping_enabled:
-            # Preserve strict patience semantics; a speculative batch could
-            # otherwise commit trials after the stop condition is met.
-            batch_size = 1
-        i = 0
-        while proposals_available:
-            if self.cancel_callback is not None:
-                cancellation = self.cancel_callback()
-                if cancellation:
-                    reason = cancellation if isinstance(cancellation, str) else "cancel_callback"
-                    scheduler = self.study_store.study_state(self.study_id).get("scheduler", {})
-                    self._update_study_state({"scheduler": {
-                        **scheduler, "cancellation_reason": reason,
-                    }})
-                    break
-            proposals = self.search_strategy.ask(batch_size)
-            if not proposals:
-                break
-            results = self._evaluate_batch(proposals, X, y, groups, fit_params)
-            for params, result in zip(proposals, results):
-                i += 1
-                if self.verbose:
-                    print(f"\n[{i}/{total_candidates}] Testing: {params}")
-                metadata_fn = getattr(self.search_strategy, "result_metadata", None)
-                if metadata_fn is not None:
-                    result.update(metadata_fn(params))
-                if (self.strategy == "optuna" and "error" not in result
-                        and result.get("trial_state") != "pruned" and "objective_values" not in result):
-                    directions = self.optuna_directions or {self._scoring[0]: "maximize"}
-                    result["objective_values"] = {
-                        name: result[f"mean_test_{name}"] for name in directions
-                    }
-                if self.study_store.commit_trial(self.study_id, params, result):
-                    self.result_manager.add_result(result)
-                    self.search_strategy.tell([result])
-                    scheduler = self.study_store.study_state(self.study_id).get("scheduler", {})
-                    self._update_study_state({"scheduler": {
-                        **scheduler,
-                        "attempts": scheduler.get("attempts", 0) + 1,
-                        "cancellation_reason": result.get("cancellation_reason"),
-                    }})
-
-                if self.verbose and 'error' not in result:
-                    current_str = self._format_metric_string(result)
-                    best_str = self._compute_best_metrics()
-                    print(f"Saved. Current: {current_str} | Best: {best_str}")
-
-                if early_stopping_enabled:
-                    if 'error' not in result:
-                        current_score = result.get(f'mean_test_{primary_metric}', -float('inf'))
-                        if current_score > best_score + 1e-9:
-                            best_score = current_score
-                            no_improvement_count = 0
-                        else:
-                            no_improvement_count += 1
-                    else:
-                        no_improvement_count += 1
-                    stop_reason = None
-                    if no_improvement_count >= self.early_stopping_patience:
-                        stop_reason = "patience_exhausted"
-                        proposals_available = False
-                    self._update_study_state({
-                        "early_stopping": {
-                            "metric": primary_metric,
-                            "best_score": best_score,
-                            "no_improvement_count": no_improvement_count,
-                            "processed_trial_count": len(self.result_manager.results),
-                            "stop_reason": stop_reason,
-                        }
-                    })
-                    if not proposals_available:
-                        break
+        self.study_engine = StudyEngine(
+            spec=spec, store=self.study_store, study_id=self.study_id,
+            strategy=self.search_strategy, result_manager=self.result_manager,
+            evaluate_batch=lambda proposals: self._evaluate_batch(proposals, X, y, groups, fit_params),
+            on_trial=on_trial,
+        )
+        self.study_engine.run(checkpoint_results)
 
         # Save results to CSV
         self.result_manager.save_to_csv()

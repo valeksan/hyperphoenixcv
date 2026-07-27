@@ -39,6 +39,12 @@ cd hyperphoenixcv
 pip install -e .
 ```
 
+### Supported runtime
+
+Python 3.10–3.12 on Linux. Minimum dependencies: NumPy 1.21.6, pandas 1.5,
+joblib 1.3, and scikit-learn 1.4. Optuna 3.0+ is optional. Windows and macOS
+are not supported targets until durability CI coverage exists.
+
 ## 📖 Why HyperPhoenixCV?
 
 The name **HyperPhoenixCV** refers to the mythical phoenix – a bird that rises from its ashes. In the same way, your hyperparameter search can "rise again" after an interruption, continuing from the last saved checkpoint instead of starting over from scratch.
