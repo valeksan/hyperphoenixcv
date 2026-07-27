@@ -301,6 +301,8 @@ hp = HyperPhoenixCV(
 Control parallel execution and error behavior:
 
 ```python
+import numpy as np
+
 hp = HyperPhoenixCV(
     estimator=model,
     search_space=param_grid,
