@@ -25,10 +25,10 @@ HyperPhoenixCV — это умная библиотека для подбора 
 
 ## 🚀 Установка
 
-Установите из PyPI:
+Установите текущую версию из TestPyPI. PyPI указан как дополнительный индекс для зависимостей:
 
 ```bash
-pip install hyperphoenixcv
+pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple hyperphoenixcv
 ```
 
 Или установите последнюю версию из исходного кода:
@@ -152,7 +152,7 @@ hp = HyperPhoenixCV(
 Установите optional backend:
 
 ```bash
-pip install "hyperphoenixcv[optuna]"
+pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple "hyperphoenixcv[optuna]"
 ```
 
 ```python
