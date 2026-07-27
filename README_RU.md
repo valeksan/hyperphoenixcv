@@ -396,6 +396,8 @@ hp.fit(X, y, groups=groups)
 SQLite store поддержан только на локальной файловой системе. Windows locking и
 durability не проверены в CI для P0, поэтому Windows пока не является
 поддерживаемой платформой. Не используйте network/synced folders для store.
+Backup, integrity check, WAL/SHM cleanup и recovery procedure: см.
+[local storage recovery](docs/storage_recovery.md).
 
 Полный список параметров и методов см. в исходном коде или используйте `help(HyperPhoenixCV)`.
 

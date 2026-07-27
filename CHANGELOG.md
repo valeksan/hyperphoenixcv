@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.1 — 2026-07-27
+
+- Hardened local SQLite storage with diagnosable error taxonomy.
+- Added integrity check, consistent backup/restore, migration durability tests,
+  WAL/SHM cleanup policy, local-filesystem warning, and storage CLI.
+- Added operator recovery documentation.
+
 ## 0.6.0 — 2026-07-27
 
 ### Changed

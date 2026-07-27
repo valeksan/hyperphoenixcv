@@ -7,10 +7,12 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 import json
 import math
+import os
 from pathlib import Path
 import sqlite3
 from typing import Any, Iterator
 from uuid import uuid4
+import warnings
 
 from ..study_identity import StudyIdentity, canonicalize, mismatch_fields, param_key
 
@@ -24,6 +26,72 @@ class StudyStoreError(ValueError):
 
 class StudyMismatchError(StudyStoreError):
     """Storage path already belongs to another study."""
+
+
+class StorageUnavailableError(StudyStoreError):
+    """Storage path cannot be opened; verify path and parent directory."""
+
+
+class StoragePermissionError(StorageUnavailableError):
+    """Storage path is not readable or writable by current user."""
+
+
+class StorageDiskFullError(StudyStoreError):
+    """SQLite cannot commit because filesystem has no free space."""
+
+
+class StorageLockedError(StudyStoreError):
+    """SQLite is locked by another writer; local single coordinator required."""
+
+
+class StorageCorruptionError(StudyStoreError):
+    """SQLite file or JSON payload is corrupt; restore a verified backup."""
+
+
+class StorageSchemaError(StorageCorruptionError):
+    """SQLite schema is unsupported or incomplete."""
+
+
+class LocalFilesystemWarning(RuntimeWarning):
+    """SQLite path appears to live on a network/shared filesystem."""
+
+
+def _storage_error(error: BaseException, path: str) -> StudyStoreError:
+    message = str(error).lower()
+    if isinstance(error, PermissionError) or "permission denied" in message:
+        return StoragePermissionError(f"Storage permission denied: {path}. Check directory ownership and mode.")
+    if ((isinstance(error, OSError) and error.errno in {28, 122})
+            or "database or disk is full" in message or "disk full" in message):
+        return StorageDiskFullError(f"Storage disk full: {path}. Free space, then resume same study.")
+    if "database is locked" in message or "database schema is locked" in message:
+        return StorageLockedError(f"Storage locked: {path}. Stop other writer; SQLite supports one local coordinator.")
+    if "malformed" in message or "not a database" in message or "database disk image is malformed" in message:
+        return StorageCorruptionError(f"Storage corrupt: {path}. Run integrity check; restore verified backup if it fails.")
+    return StorageUnavailableError(f"Storage unavailable: {path}. {error}")
+
+
+def _network_filesystem(path: Path) -> str | None:
+    """Best-effort Linux mount detection. Unknown platforms remain documented-only."""
+    mounts = Path("/proc/mounts")
+    if not mounts.exists():
+        return None
+    try:
+        resolved = path.resolve()
+        candidates: list[tuple[int, str]] = []
+        for line in mounts.read_text(encoding="utf-8").splitlines():
+            fields = line.split()
+            if len(fields) < 3:
+                continue
+            mount, fs_type = Path(fields[1].replace("\\040", " ")), fields[2].lower()
+            try:
+                resolved.relative_to(mount)
+            except ValueError:
+                continue
+            if fs_type.startswith(("nfs", "cifs", "smb", "sshfs", "afp", "davfs", "9p")) or fs_type == "fuse":
+                candidates.append((len(str(mount)), fs_type))
+        return max(candidates)[1] if candidates else None
+    except OSError:
+        return None
 
 
 def _now() -> str:
@@ -68,18 +136,39 @@ def _restore(value: Any) -> Any:
     return value
 
 
+def _load_json(payload: str, *, column: str, path: str) -> Any:
+    try:
+        return _restore(json.loads(payload))
+    except (TypeError, json.JSONDecodeError) as error:
+        raise StorageCorruptionError(
+            f"Malformed JSON in {column} at {path}. Run integrity check; restore verified backup if needed."
+        ) from error
+
+
 class SQLiteStudyStore:
     """One-process local SQLite store. No shared-filesystem locking guarantee."""
 
-    def __init__(self, path: str):
+    def __init__(self, path: str | Path):
         self.path = str(path)
-        Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(self.path, timeout=30, isolation_level=None)
-        self.connection.row_factory = sqlite3.Row
-        self.connection.execute("PRAGMA foreign_keys = ON")
-        self.connection.execute("PRAGMA journal_mode = WAL")
-        self.connection.execute("PRAGMA synchronous = FULL")
-        self._migrate()
+        target = Path(self.path)
+        fs_type = _network_filesystem(target)
+        if fs_type:
+            warnings.warn(
+                f"SQLite storage path {self.path!r} is on {fs_type}; local filesystem only, "
+                "locking/durability are not supported.", LocalFilesystemWarning, stacklevel=2,
+            )
+        self.connection: sqlite3.Connection | None = None
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            self.connection = sqlite3.connect(self.path, timeout=30, isolation_level=None)
+            self.connection.row_factory = sqlite3.Row
+            self.connection.execute("PRAGMA foreign_keys = ON")
+            self.connection.execute("PRAGMA journal_mode = WAL")
+            self.connection.execute("PRAGMA synchronous = FULL")
+            self._migrate()
+        except (OSError, sqlite3.Error) as error:
+            self.close()
+            raise _storage_error(error, self.path) from error
 
     def close(self) -> None:
         if self.connection is not None:
@@ -95,21 +184,39 @@ class SQLiteStudyStore:
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
         try:
+            assert self.connection is not None
             self.connection.execute("BEGIN IMMEDIATE")
             yield self.connection
-        except BaseException:
-            self.connection.execute("ROLLBACK")
+        except BaseException as error:
+            try:
+                self.connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            if isinstance(error, sqlite3.Error) and not isinstance(error, sqlite3.IntegrityError):
+                raise _storage_error(error, self.path) from error
             raise
         else:
-            self.connection.execute("COMMIT")
+            try:
+                self.connection.execute("COMMIT")
+            except sqlite3.Error as error:
+                raise _storage_error(error, self.path) from error
 
     def _migrate(self) -> None:
+        assert self.connection is not None
         version = self.connection.execute("PRAGMA user_version").fetchone()[0]
         if version > SCHEMA_VERSION:
-            raise StudyStoreError(
+            raise StorageSchemaError(
                 f"Unsupported SQLite schema version {version}; expected <= {SCHEMA_VERSION}"
             )
         if version == 0:
+            tables = {row[0] for row in self.connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )}
+            if {"studies", "trials"} & tables:
+                raise StorageSchemaError(
+                    f"Invalid SQLite schema at {self.path}: user_version is 0 but study tables exist. "
+                    "Restore backup or migrate a clean copy."
+                )
             self.connection.executescript(
                 f"""
                     CREATE TABLE IF NOT EXISTS studies (
@@ -149,6 +256,7 @@ class SQLiteStudyStore:
                     PRAGMA user_version = {SCHEMA_VERSION};
                 """
             )
+            return
         if version == 1:
             # Version 1 stored canonical JSON in ``param_key``. Convert it to
             # a compact SHA-256 key before new resume logic reads the rows.
@@ -227,6 +335,24 @@ class SQLiteStudyStore:
                 conn.execute("CREATE INDEX trials_study_sequence_idx ON trials(study_id, sequence)")
                 conn.execute("PRAGMA user_version = 5")
 
+        self._validate_schema()
+
+    def _validate_schema(self) -> None:
+        """Reject partial/interrupted schemas before resume reads durable trials."""
+        assert self.connection is not None
+        required = {
+            "studies": {"study_id", "dataset_id", "estimator_digest", "space_digest", "cv_digest", "scorer_digest", "seed", "config_digest", "state_json", "created_at", "updated_at"},
+            "trials": {"trial_id", "study_id", "sequence", "state", "param_key", "params_json", "result_json", "objective_values_json", "diagnostics_json", "exception_type", "exception_message", "created_at", "updated_at"},
+        }
+        for table, columns in required.items():
+            actual = {row[1] for row in self.connection.execute(f"PRAGMA table_info({table})")}
+            missing = columns - actual
+            if missing:
+                raise StorageSchemaError(
+                    f"Invalid SQLite schema at {self.path}: {table} missing {', '.join(sorted(missing))}. "
+                    "Restore backup or migrate a clean copy."
+                )
+
     @staticmethod
     def _identity(row: sqlite3.Row) -> StudyIdentity:
         return StudyIdentity(
@@ -286,7 +412,7 @@ class SQLiteStudyStore:
         ).fetchone()
         if row is None:
             raise StudyStoreError(f"Unknown study: {study_id}")
-        return _restore(json.loads(row["state_json"]))
+        return _load_json(row["state_json"], column="studies.state_json", path=self.path)
 
     def update_study_state(self, study_id: str, state: dict[str, Any]) -> None:
         """Atomically replace small orchestration state after a committed trial."""
@@ -336,13 +462,13 @@ class SQLiteStudyStore:
         sql += " ORDER BY sequence LIMIT ? OFFSET ?"
         params.extend([-1 if limit is None else limit, offset])
         for row in self.connection.execute(sql, params):
-            result = _restore(json.loads(row["result_json"]))
+            result = _load_json(row["result_json"], column="trials.result_json", path=self.path)
             objectives = (
-                _restore(json.loads(row["objective_values_json"]))
+                _load_json(row["objective_values_json"], column="trials.objective_values_json", path=self.path)
                 if row["objective_values_json"] is not None else None
             )
             diagnostics = (
-                _restore(json.loads(row["diagnostics_json"]))
+                _load_json(row["diagnostics_json"], column="trials.diagnostics_json", path=self.path)
                 if row["diagnostics_json"] is not None else None
             )
             if objectives is not None:
@@ -352,7 +478,7 @@ class SQLiteStudyStore:
             yield {
                 "trial_id": row["trial_id"], "sequence": row["sequence"],
                 "state": row["state"], "param_key": row["param_key"],
-                "params": _restore(json.loads(row["params_json"])), "result": result,
+                "params": _load_json(row["params_json"], column="trials.params_json", path=self.path), "result": result,
                 "objective_values": objectives, "diagnostics": diagnostics,
                 "exception_type": row["exception_type"],
                 "exception_message": row["exception_message"],
@@ -394,3 +520,81 @@ class SQLiteStudyStore:
             target = Path(f"{self.path}{suffix}")
             if target.exists():
                 target.unlink()
+
+    def backup_to(self, destination: str | Path) -> Path:
+        """Create consistent SQLite backup. Keep source open; backup includes committed trials."""
+        destination = Path(destination)
+        if destination.resolve() == Path(self.path).resolve():
+            raise ValueError("backup destination must differ from storage path")
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(destination) as backup:
+                assert self.connection is not None
+                self.connection.backup(backup)
+            return destination
+        except (OSError, sqlite3.Error) as error:
+            raise _storage_error(error, str(destination)) from error
+
+    @classmethod
+    def restore_from(cls, backup_path: str | Path, destination: str | Path) -> Path:
+        """Restore a verified backup to a stopped study path, replacing destination atomically."""
+        source, destination = Path(backup_path), Path(destination)
+        if not source.is_file():
+            raise FileNotFoundError(f"SQLite backup does not exist: {source}")
+        if source.resolve() == destination.resolve():
+            raise ValueError("backup source and restore destination must differ")
+        temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.restore")
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(source) as reader, sqlite3.connect(temporary) as writer:
+                reader.backup(writer)
+            with cls(temporary) as restored:
+                report = restored.integrity_check()
+                if not report["ok"]:
+                    raise StorageCorruptionError(f"Backup failed integrity check: {source}: {report['errors']}")
+            os.replace(temporary, destination)
+            for suffix in ("-wal", "-shm"):
+                Path(f"{destination}{suffix}").unlink(missing_ok=True)
+            return destination
+        except (OSError, sqlite3.Error) as error:
+            temporary.unlink(missing_ok=True)
+            raise _storage_error(error, str(destination)) from error
+
+    def integrity_check(self) -> dict[str, Any]:
+        """Run SQLite and application invariants without mutating study data."""
+        assert self.connection is not None
+        errors = [row[0] for row in self.connection.execute("PRAGMA integrity_check") if row[0] != "ok"]
+        foreign_keys = self.connection.execute("PRAGMA foreign_key_check").fetchall()
+        if foreign_keys:
+            errors.append(f"foreign key violations: {len(foreign_keys)}")
+        try:
+            studies = self.connection.execute("SELECT study_id, state_json FROM studies").fetchall()
+            for row in studies:
+                _load_json(row["state_json"], column="studies.state_json", path=self.path)
+            rows = self.connection.execute(
+                "SELECT study_id, sequence, param_key, params_json, result_json, objective_values_json, diagnostics_json FROM trials ORDER BY study_id, sequence"
+            ).fetchall()
+            previous: dict[str, int] = {}
+            for row in rows:
+                expected = previous.get(row["study_id"], 0) + 1
+                if row["sequence"] != expected:
+                    errors.append(f"non-contiguous trial sequence for study {row['study_id']}")
+                previous[row["study_id"]] = row["sequence"]
+                params = _load_json(row["params_json"], column="trials.params_json", path=self.path)
+                if param_key(params) != row["param_key"]:
+                    errors.append(f"param_key mismatch at trial sequence {row['sequence']}")
+                _load_json(row["result_json"], column="trials.result_json", path=self.path)
+                for column in ("objective_values_json", "diagnostics_json"):
+                    if row[column] is not None:
+                        _load_json(row[column], column=f"trials.{column}", path=self.path)
+        except StorageCorruptionError as error:
+            errors.append(str(error))
+        return {"ok": not errors, "path": self.path, "schema_version": SCHEMA_VERSION, "errors": errors}
+
+    def prune_empty_studies(self) -> int:
+        """Remove abandoned studies with no terminal trials; never touches trial history."""
+        with self._transaction() as conn:
+            deleted = conn.execute(
+                "DELETE FROM studies WHERE NOT EXISTS (SELECT 1 FROM trials WHERE trials.study_id = studies.study_id)"
+            )
+        return deleted.rowcount

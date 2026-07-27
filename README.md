@@ -417,6 +417,8 @@ Main class for hyperparameter search.
 SQLite storage is supported only on a local filesystem. Windows locking and
 durability behavior is not CI-validated in P0, so Windows is not yet a
 supported target. Do not use network or synced folders for a study store.
+Backup, integrity checks, WAL/SHM cleanup, and recovery procedure: see
+[local storage recovery](docs/storage_recovery.md).
 
 For a complete list of parameters and methods, see the source code or use `help(HyperPhoenixCV)`.
 

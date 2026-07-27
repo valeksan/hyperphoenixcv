@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hyperphoenixcv"
-version = "0.6.0"
+version = "0.6.1"
 description = "Hyper-parameter search with resumable SQLite studies"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -49,6 +49,9 @@ parquet = [
 [project.urls]
 "Bug Tracker" = "https://github.com/valeksan/hyperphoenixcv/issues"
 "Source Code" = "https://github.com/valeksan/hyperphoenixcv"
+
+[project.scripts]
+hyperphoenixcv-storage = "hyperphoenixcv.storage.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
