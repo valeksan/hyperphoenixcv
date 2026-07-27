@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 """
-HyperPhoenixCV - Resumable hyperparameter search with checkpoint support.
+HyperPhoenixCV - Resumable hyperparameter search with local SQLite storage.
 
 This module provides the HyperPhoenixCV class, which extends the functionality
-of scikit-learn's GridSearchCV by adding checkpoint support, random search,
+of scikit-learn's GridSearchCV by adding resumable SQLite studies, random search,
 an optional Optuna backend, and experimental surrogate-ranking compatibility.
 """
 
@@ -55,14 +55,14 @@ def _early_stop_from_results(results: list[dict], metric: str) -> tuple[float, i
 
 class HyperPhoenixCV(BaseEstimator):
     """
-    Resumable hyperparameter search with checkpoint support.
+    Resumable hyperparameter search with local SQLite storage.
     Supports grid/random search, optional Optuna search, and experimental surrogate ranking.
 
     Example usage:
     # Create an instance
     hp = HyperPhoenixCV(
         estimator=combat_pipeline,
-        param_grid={
+        search_space={
             'tfidf__max_features': [8000, 12000, 15000],
             'tfidf__ngram_range': [(1,1), (1,2)],
             'clf__C': [0.001, 0.01, 0.1],
@@ -71,9 +71,10 @@ class HyperPhoenixCV(BaseEstimator):
             'clf__class_weight': [None, 'balanced']
         },
         scoring=['f1', 'accuracy'],
+        strategy="grid",
         cv=5,
         n_jobs=-2,
-        checkpoint_path="experiment_checkpoint.sqlite3",
+        storage_path="experiment_checkpoint.sqlite3",
         results_csv="experiment_results.csv",
         verbose=True
     )
@@ -81,7 +82,7 @@ class HyperPhoenixCV(BaseEstimator):
     # Start the search
     hp.fit(X, y)
 
-    # If the process was interrupted, run again with the same checkpoint_path:
+    # If interrupted, run again with same storage_path:
     hp.fit(X, y)  # Will continue from the last saved point!
 
     # Get results

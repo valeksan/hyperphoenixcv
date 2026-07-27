@@ -143,7 +143,7 @@ print(report)  # imported/skipped/failed и детали невалидных з
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=param_grid,
     strategy="random",
     n_trials=30,
     verbose=True
@@ -179,7 +179,6 @@ import optuna
 
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=None,
     strategy="optuna",
     search_space={
         "C": optuna.distributions.FloatDistribution(1e-4, 10, log=True),
@@ -209,7 +208,7 @@ Multi-objective требует `optuna_directions`, публикует `pareto_f
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=param_grid,
     strategy="random",
     n_trials=50         # Количество случайных комбинаций
 )
@@ -222,7 +221,8 @@ hp = HyperPhoenixCV(
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=param_grid,
+    strategy="grid",
     scoring={'f1': 'f1', 'accuracy': 'accuracy', 'precision': 'precision'},
     refit='f1',
 )
@@ -235,7 +235,8 @@ hp = HyperPhoenixCV(
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=param_grid,
+    strategy="grid",
     results_csv='experiment_results.csv'
 )
 ```
@@ -249,7 +250,8 @@ import numpy as np
 
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=param_grid,
+    strategy="grid",
     n_jobs=4,
     parallelism='trials',    # По умолчанию: до четырёх trials, CV однопоточный
     inner_max_num_threads=1, # Число native threads на процесс trial
@@ -268,7 +270,9 @@ folds. Вложенный параллелизм trials × folds намерен�
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=param_grid,
+    strategy="random",
+    n_trials=50,
     early_stopping_patience=5,  # Остановить после 5 итераций без улучшений
     verbose=True
 )
@@ -285,7 +289,8 @@ from sklearn.model_selection import TimeSeriesSplit, GroupKFold
 ts_cv = TimeSeriesSplit(n_splits=5)
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=param_grid,
+    strategy="grid",
     cv=ts_cv,          # Используется объект сплиттера
     scoring='accuracy'
 )
@@ -294,7 +299,8 @@ hp = HyperPhoenixCV(
 group_cv = GroupKFold(n_splits=5)
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=param_grid,
+    strategy="grid",
     cv=group_cv,
     scoring='accuracy'
 )
@@ -344,6 +350,7 @@ hp.fit(X, y, groups=groups)
   `use_bayesian_optimization`, `bayesian_optimizer` и `checkpoint_path`
   выдают `FutureWarning` в 0.5 и удаляются в 0.6. Используйте
   `search_space`, `strategy`, `n_trials`, `storage_path` и `resume`.
+  Подробнее: [migration 0.4 → 0.6](docs/migration_0.4_to_0.6.md).
 - `results_csv`: путь к CSV‑файлу для сохранения результатов (по умолчанию=None).
 - `verbose`: уровень детализации (по умолчанию=False).
 

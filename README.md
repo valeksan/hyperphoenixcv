@@ -153,7 +153,7 @@ Use seeded random search, or genuine Optuna ask/tell:
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=param_grid,
     strategy="random",
     n_trials=30,
     verbose=True
@@ -189,7 +189,6 @@ import optuna
 
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=None,
     strategy="optuna",
     search_space={
         "C": optuna.distributions.FloatDistribution(1e-4, 10, log=True),
@@ -210,7 +209,7 @@ Use `refit=False`, metric name, or selector callable; `refit=True` is invalid.
 
 ```python
 hp = HyperPhoenixCV(
-    estimator=model, param_grid=None, strategy="optuna", search_space=space,
+    estimator=model, strategy="optuna", search_space=space,
     n_trials=40, scoring=["accuracy", "neg_log_loss"],
     optuna_directions={"accuracy": "maximize", "neg_log_loss": "maximize"},
     refit=False,
@@ -232,7 +231,7 @@ Perform a random search over the parameter space:
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=param_grid,
     strategy="random",
     n_trials=50         # Number of random combinations
 )
@@ -245,7 +244,8 @@ Evaluate using several metrics at once:
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=param_grid,
+    strategy="grid",
     scoring={'f1': 'f1', 'accuracy': 'accuracy', 'precision': 'precision'},
     refit='f1',
 )
@@ -258,7 +258,8 @@ Save all results to a CSV file for further analysis:
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=param_grid,
+    strategy="grid",
     results_csv='experiment_results.csv'
 )
 ```
@@ -270,7 +271,8 @@ Control parallel execution and error behavior:
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=param_grid,
+    strategy="grid",
     n_jobs=4,
     parallelism='trials',    # Default: up to four trials, one CV worker each
     inner_max_num_threads=1, # Native threads per trial process
@@ -289,7 +291,9 @@ Stop the search early if no improvement is observed for a given number of iterat
 ```python
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=param_grid,
+    strategy="random",
+    n_trials=50,
     early_stopping_patience=5,  # Stop after 5 iterations without improvement
     verbose=True
 )
@@ -306,7 +310,8 @@ from sklearn.model_selection import TimeSeriesSplit, GroupKFold
 ts_cv = TimeSeriesSplit(n_splits=5)
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=param_grid,
+    strategy="grid",
     cv=ts_cv,          # Use the splitter object
     scoring='accuracy'
 )
@@ -315,7 +320,8 @@ hp = HyperPhoenixCV(
 group_cv = GroupKFold(n_splits=5)
 hp = HyperPhoenixCV(
     estimator=model,
-    param_grid=param_grid,
+    search_space=param_grid,
+    strategy="grid",
     cv=group_cv,
     scoring='accuracy'
 )
@@ -365,6 +371,7 @@ Main class for hyperparameter search.
   `use_bayesian_optimization`, `bayesian_optimizer`, and `checkpoint_path`
   emit `FutureWarning` in 0.5 and are removed in 0.6. Use `search_space`,
   `strategy`, `n_trials`, `storage_path`, and `resume` instead.
+  See [0.4 to 0.6 migration](docs/migration_0.4_to_0.6.md).
 - `results_csv`: path to CSV file for saving results (default=None).
 - `verbose`: verbosity level (default=False).
 

@@ -1,5 +1,6 @@
 import pytest
 import warnings
+import inspect
 from sklearn.base import clone
 from sklearn.linear_model import LogisticRegression
 
@@ -21,14 +22,20 @@ def _canonical(tmp_path, **kwargs):
     return HyperPhoenixCV(**config)
 
 
-def test_canonical_grid_api_fits_and_clones(tmp_path):
+def test_canonical_signature_clone_get_and_set_params(tmp_path):
     search = _canonical(tmp_path)
+    signature = inspect.signature(HyperPhoenixCV)
+    assert {"search_space", "strategy", "n_trials", "storage_path", "resume"} <= set(signature.parameters)
     cloned = clone(search)
     assert cloned.get_params(deep=False)["search_space"] == {"C": [0.1, 1.0]}
     assert cloned.get_params(deep=False)["storage_path"].endswith("study.sqlite3")
-    cloned.set_params(n_trials=2, resume="never")
-    assert cloned.n_trials == 2
+    cloned.set_params(search_space={"C": [1.0]}, strategy="random", n_trials=1, resume="never")
+    assert cloned.search_space == {"C": [1.0]}
+    assert cloned.strategy == "random"
+    assert cloned.n_trials == 1
     assert cloned.resume == "never"
+    cloned.fit([[0], [1], [2], [3]], [0, 0, 1, 1])
+    assert len(cloned.cv_results_["params"]) == 1
 
 
 def test_canonical_random_uses_n_trials(tmp_path):

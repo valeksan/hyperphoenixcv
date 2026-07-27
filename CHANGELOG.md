@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Documentation examples now use canonical `search_space`, `strategy`,
+  `n_trials`, and `storage_path` configuration. Added tracked 0.4-to-0.6
+  migration guide and clone/get/set-params coverage.
+
 ## 0.5.0 — 2026-07-27
 
 ### Deprecated
