@@ -14,13 +14,13 @@ never fails the gate.
 
 | Workload | Median wall | Trials/s | Proposal p95 | SQLite commit p95 |
 | --- | ---: | ---: | ---: | ---: |
-| cheap (~5 ms/trial) | 0.167 s | 48.0 | 0.048 ms | 2.44 ms |
-| medium (~30 ms/trial) | 0.390 s | 20.5 | 0.066 ms | 2.48 ms |
-| expensive (~150 ms/trial) | 1.394 s | 5.74 | 0.051 ms | 2.33 ms |
+| cheap (~5 ms/trial) | 0.176 s | 45.6 | 0.048 ms | 2.45 ms |
+| medium (~30 ms/trial) | 0.371 s | 21.6 | 0.039 ms | 2.25 ms |
+| expensive (~150 ms/trial) | 1.377 s | 5.81 | 0.038 ms | 2.17 ms |
 
 Scale checks passed: a 10^9-combination grid counted and sampled its first ten
-candidates in 0.29 ms without materialization. Resume restored and skipped
-1k/10k/100k durable trials in 0.038/0.353/3.637 s. The P2.3 no-retention
+candidates in 0.24 ms without materialization. Resume restored and skipped
+1k/10k/100k durable trials in 0.041/0.346/3.497 s. The P2.3 no-retention
 projection processed 100k results while retaining zero result objects.
 
 Parallel comparison with `n_jobs=2`, `inner_max_num_threads=1` showed trial
@@ -36,8 +36,8 @@ sleep; HyperPhoenixCV's `StudyEngine` only coordinates them. The largest
 specific HyperPhoenixCV path is SQLite-store construction (0.090 s of 0.826 s,
 10.9%), including filesystem detection. It is local SQLite/filesystem I/O, not
 a CPU loop suitable for a native extension. Per-trial SQLite commit p95 is
-2.48 ms. Direct component measurements record 100k `param_key` calls at
-0.721 s, no-retention projection at 0.018 s, and 8 MiB joblib transport at
+2.25 ms. Direct component measurements record 100k `param_key` calls at
+0.726 s, no-retention projection at 0.021 s, and 8 MiB joblib transport at
 0.041 s; none is at least 10% of representative search runtime per trial.
 
 No eligible Python-compute hotspot reaches the native gate. No optimization is
