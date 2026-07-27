@@ -54,7 +54,7 @@ jobs:
         python -m pip install -e '.[test]' build
         if [ "${{ matrix.dependency-set }}" = "minimum" ]; then
           python -m pip install --force-reinstall \
-            'numpy==1.21.6' 'scipy==1.10.1' 'pandas==1.5.0' 'joblib==1.2.0' 'scikit-learn==1.4.0'
+            'numpy==1.21.6' 'scipy==1.10.1' 'pandas==1.5.0' 'joblib==1.3.2' 'scikit-learn==1.4.0'
         fi
 
     - name: Run tests with pytest

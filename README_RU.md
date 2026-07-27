@@ -42,7 +42,7 @@ pip install -e .
 ### Поддерживаемая среда
 
 Python 3.10–3.12 на Linux. Минимальные зависимости: NumPy 1.21.6, pandas 1.5,
-joblib 1.2, scikit-learn 1.4. Optuna 3.0+ — опциональная зависимость. Windows
+joblib 1.3, scikit-learn 1.4. Optuna 3.0+ — опциональная зависимость. Windows
 и macOS пока не поддерживаются: нет CI-проверок надёжности хранения.
 
 ## 📖 Почему HyperPhoenixCV?
