@@ -3,7 +3,7 @@
 Run release baseline:
 
 ```bash
-python benchmarks/p2_performance_benchmark.py --output benchmarks/p2_baseline.json
+python benchmarks/performance_benchmark.py --output benchmarks/performance_baseline.json
 ```
 
 Five runs supply median/p95 values. Comparison flags only median slowdowns over
@@ -13,7 +13,7 @@ instead of failing on noisy host measurement. `--runs` rejects fewer than 3.
 Fast smoke:
 
 ```bash
-python benchmarks/p2_performance_benchmark.py --runs 3 --resume-sizes 1000
+python benchmarks/performance_benchmark.py --runs 3 --resume-sizes 1000
 ```
 
 Harness records: wall time, throughput, proposal/store p50+p95, process peak

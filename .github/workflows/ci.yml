@@ -10,6 +10,8 @@ on:
       - 'verify_library.py'
       - 'README.md'
       - 'README_RU.md'
+      - 'docs/**/*.md'
+      - 'local_docs/**/*.md'
       - 'examples/**/*.py'
       - 'requirements.txt'
       - '.github/workflows/ci.yml'
@@ -22,6 +24,8 @@ on:
       - 'verify_library.py'
       - 'README.md'
       - 'README_RU.md'
+      - 'docs/**/*.md'
+      - 'local_docs/**/*.md'
       - 'examples/**/*.py'
       - 'requirements.txt'
       - '.github/workflows/ci.yml'
@@ -128,4 +132,73 @@ jobs:
         resumed = HyperPhoenixCV(**kwargs, resume="must").fit(X, y)
         assert len(first.cv_results_["params"]) == 1
         assert len(resumed.cv_results_["params"]) == 1
+        PY
+
+  wheel-optuna-smoke:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+
+    - name: Build wheel and smoke test clean Optuna install
+      run: |
+        python -m pip install --upgrade pip build
+        python -m build
+        python -m venv /tmp/hyperphoenixcv-optuna-wheel-env
+        PYTHON=/tmp/hyperphoenixcv-optuna-wheel-env/bin/python
+        $PYTHON -m pip install --upgrade pip
+        $PYTHON -m pip install 'dist/*.whl[optuna]'
+        $PYTHON - <<'PY'
+        import tempfile
+        from pathlib import Path
+
+        import optuna
+        from sklearn.datasets import load_iris
+        from sklearn.linear_model import LogisticRegression
+        from hyperphoenixcv import HyperPhoenixCV
+
+        X, y = load_iris(return_X_y=True)
+        study = Path(tempfile.mkdtemp()) / "optuna.sqlite3"
+        search = HyperPhoenixCV(
+            estimator=LogisticRegression(max_iter=200),
+            strategy="optuna",
+            search_space={"C": optuna.distributions.FloatDistribution(0.1, 1.0)},
+            n_trials=1,
+            scoring="accuracy",
+            cv=2,
+            storage_path=study,
+            dataset_id="wheel-optuna-smoke-iris-v1",
+        ).fit(X, y)
+        assert len(search.cv_results_["params"]) == 1
+        PY
+
+  artifact-check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+
+    - name: Build and inspect artifacts
+      run: |
+        python -m pip install --upgrade pip build
+        python -m build
+        python - <<'PY'
+        import zipfile
+        from pathlib import Path
+
+        wheel = next(Path("dist").glob("*.whl"))
+        with zipfile.ZipFile(wheel) as archive:
+            names = set(archive.namelist())
+        assert "hyperphoenixcv/__init__.py" in names
+        assert "hyperphoenixcv/core.py" in names
+        assert "hyperphoenixcv/storage/sqlite_store.py" in names
+        assert any(name.endswith("METADATA") for name in names)
+        assert not any("tests/" in name or "local_docs/" in name for name in names)
+        assert len(list(Path("dist").glob("*.tar.gz"))) == 1
         PY

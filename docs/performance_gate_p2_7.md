@@ -3,9 +3,9 @@
 Recorded on 2026-07-27, Linux, Python 3.12.3, 12 logical CPUs. Command:
 
 ```bash
-python benchmarks/p2_performance_benchmark.py \
-  --output benchmarks/p2_baseline.json \
-  --profile benchmarks/p2_profile.txt
+python benchmarks/performance_benchmark.py \
+  --output benchmarks/performance_baseline.json \
+  --profile benchmarks/performance_profile.txt
 ```
 
 The committed baseline uses five samples. Regression comparison uses medians
@@ -30,7 +30,7 @@ recommendation. Benchmark target workload before choosing an axis.
 
 ## Profile and decision
 
-`benchmarks/p2_profile.txt` records cProfile for the medium end-to-end run.
+`benchmarks/performance_profile.txt` records cProfile for medium end-to-end run.
 The high inclusive paths are sklearn validation/scoring and deliberate trial
 sleep; HyperPhoenixCV's `StudyEngine` only coordinates them. The largest
 specific HyperPhoenixCV path is SQLite-store construction (0.090 s of 0.826 s,

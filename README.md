@@ -33,6 +33,15 @@ they are not stored in SQLite and are not replayed on resume. `verbose=True`
 uses standard `logging` progress events; configure Python logging to display
 them. Default logs omit datasets, parameter values, and tracebacks.
 
+### Guides
+
+- [Resume identity and local storage](docs/resume_and_storage.md)
+- [Scalar and multi-objective refit](docs/refit_objectives.md)
+- [Honest Optuna pruning](docs/pruning.md)
+- [Parallelism and resource tuning](docs/parallelism.md)
+- [Audit exports and runtime events](docs/audit_and_events.md)
+- [API reference](docs/api_reference.md)
+
 ## 🚀 Installation
 
 Install current release from TestPyPI. Keep PyPI as extra index for dependencies:
@@ -140,17 +149,6 @@ hp.fit(X, y)  # Automatically resumes from 'my_experiment.sqlite3'
 ```
 
 SQLite is local, single-coordinator storage. It is not a shared-filesystem or multi-node backend. `resume` accepts `"auto"` (default), `"must"`, or `"never"`; a changed study identity is rejected instead of mixing results.
-
-### Migrating a legacy pickle checkpoint
-
-Normal `fit()` and resume never unpickle files. Import old checkpoints once into the SQLite study explicitly:
-
-```python
-report = hp.import_legacy_checkpoint("old_experiment.pkl", trusted=True)
-print(report)  # imported/skipped/failed counts and invalid-record details
-```
-
-**Security warning:** pickle/joblib loading can execute arbitrary code. Set `trusted=True` only for a file whose source and contents you trust. The importer accepts legacy `List[dict]`, preserves source file, and is idempotent.
 
 ## 📚 Advanced Usage
 
@@ -391,20 +389,18 @@ Main class for hyperparameter search.
 - `memmap_max_nbytes`, `memmap_temp_folder`, `joblib_batch_size`: joblib
   process-backend settings; arrays over default `"1M"` use read-only memmap.
 - `pre_dispatch`: controls number of dispatched jobs (default='2*n_jobs').
-- `error_score`: value to assign when an error occurs (default=np.nan).
+- `error_score`: `'raise'` or numeric value assigned when a trial error occurs
+  (default=`'raise'`).
 - `early_stopping_patience`: number of iterations without improvement to stop early (default=None, disabled).
-- `storage_path`: canonical local SQLite store path. It is never resumed as
-  pickle.
+- `storage_path`: canonical local SQLite store path.
 - `dataset_id`: stable dataset identifier. Required for strong resume identity; `None` emits a warning.
 - `resume`: `"auto"` (default), `"must"`, or `"never"`.
 - `max_cv_results`: max trials materialized in `cv_results_` (default=10,000);
   `None` opts into unbounded projection.
 - `clear_storage()`: explicitly delete SQLite study storage before `fit()`.
-- 0.6 removes legacy `param_grid`, `random_search`, `n_iter`,
-  `use_bayesian_optimization`, `bayesian_optimizer`, `checkpoint_path`, and
-  `clear_checkpoint`. See [0.4 to 0.6 migration](docs/migration_0.4_to_0.6.md).
-- `results_csv`: path to CSV file for saving results (default=None).
-- `verbose`: verbosity level (default=False).
+- `results_csv`: path to CSV file for saving results
+  (default=`"hyperphoenix_results.csv"`).
+- `verbose`: enable progress logging (default=True).
 
 **Attributes after fitting**:
 
@@ -419,8 +415,6 @@ Main class for hyperparameter search.
 
 - `fit(X, y)`: run the search and resume from matching SQLite study when allowed.
 - `get_top_results(n=10)`: return a DataFrame with top‑N candidates.
-- `load_results_from_checkpoint(n=10)`: read top results from SQLite after interruption.
-- `import_legacy_checkpoint(path, trusted=True)`: one-time trusted legacy pickle migration.
 - `clear_storage()`: delete SQLite store explicitly.
 - `load_trial_history()`: open audit history for an existing matching study.
 
@@ -430,7 +424,18 @@ supported target. Do not use network or synced folders for a study store.
 Backup, integrity checks, WAL/SHM cleanup, and recovery procedure: see
 [local storage recovery](docs/storage_recovery.md).
 
-For a complete list of parameters and methods, see the source code or use `help(HyperPhoenixCV)`.
+For complete parameters and methods, see [API reference](docs/api_reference.md)
+or `help(HyperPhoenixCV)`.
+
+## Security and operations
+
+SQLite paths are local-only: do not use network, shared, or sync folders. One
+active coordinator may write a study. Use `hyperphoenixcv-storage backup`, not
+manual database/WAL copying; see [storage recovery](docs/storage_recovery.md).
+
+Callbacks execute synchronously in your process and are trusted application
+code. Logging omits raw datasets, parameters, and full tracebacks by default;
+avoid emitting sensitive values in custom callbacks.
 
 ## 🤝 Contributing
 

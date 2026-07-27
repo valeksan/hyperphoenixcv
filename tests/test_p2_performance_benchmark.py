@@ -4,8 +4,8 @@ from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 
-BENCHMARK = Path(__file__).parents[1] / "benchmarks" / "p2_performance_benchmark.py"
-spec = spec_from_file_location("p2_performance_benchmark", BENCHMARK)
+BENCHMARK = Path(__file__).parents[1] / "benchmarks" / "performance_benchmark.py"
+spec = spec_from_file_location("performance_benchmark", BENCHMARK)
 assert spec and spec.loader
 benchmark = module_from_spec(spec)
 spec.loader.exec_module(benchmark)
