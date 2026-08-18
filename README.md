@@ -53,7 +53,7 @@ pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://
 Or install the latest development version from source:
 
 ```bash
-git clone https://github.com/valeksan/hyperphoenixcv.git
+git clone --depth=1 https://github.com/valeksan/hyperphoenixcv.git
 cd hyperphoenixcv
 pip install -e .
 ```
